@@ -1,0 +1,789 @@
+<!--
+  SolGuard -- predicts when the low sun will blind a driver, and routes around it.
+  ================================================================================
+  One page, three tabs, one map:
+    Drive        -- from / to / date+time -> route coloured by glare, best departure,
+                    "find a shadier route", and "watch this drive" (a replay).
+    Highway glare -- (for agencies) every California state highway coloured by glare at the chosen
+                    moment, with real cloud cover; tap a highway to replay driving it.
+    Drive        -- the live in-car display: GPS + compass -> GREEN / AMBER / RED.
+
+  Code layout (all plain JavaScript, no build step):
+    js/core.js     the ONE copy of the glare science, settings and weather
+    js/terrain.js  hills: the horizon toward the sun, from elevation tiles
+    js/buildings.js OpenStreetMap buildings + the "does a building block the sun?" ray cast
+    js/app.js      shared map, tabs, date/time bar, sun marker, shadow layer, HUD
+    js/plan.js     trip planner
+    js/glaremap.js statewide map ("Highway glare", for agencies)
+    js/export.js   a year of glare on state highways, as a CSV
+    js/replay.js   virtual drive along a road or a planned route
+    js/drive.js    live drive (sensors, logging)
+    js/nav.js      navigation: turn-by-turn + glare ahead, spoken alerts
+    js/view.js     driver's view (windshield + glare zones) and the sensitivity setting
+
+  Run it from a web server, never as file:// (map tiles and data files need it):
+      python -m http.server 8000      ->  http://localhost:8000
+  Live GPS additionally needs HTTPS (or localhost).
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="referrer" content="strict-origin-when-cross-origin"/>
+<title>SolGuard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  /* Theme: a light, quiet system look (soft grey page, white cards, one blue
+     accent, the system font); dark when the device is set to dark -- which also
+     suits a phone in the car at night. Status colours are the accessible
+     (darker) system green / orange / red, so white text reads on them. */
+  :root{
+    --bg:#f5f5f7; --panel:#ffffff; --panel2:#f2f2f5; --line:rgba(0,0,0,.09);
+    --text:#1d1d1f; --muted:#6e6e73; --accent:#0071e3; --accent-soft:rgba(0,113,227,.10);
+    --green:#248a3d; --amber:#c93400; --red:#d70015; --purple:#8944ab; --neutral:#6e6e73;
+    --header:rgba(255,255,255,.78); --seg:#e8e8ed; --seg-on:#ffffff; --track:#e3e3e8;
+    --shadow:0 1px 2px rgba(0,0,0,.04),0 4px 18px rgba(0,0,0,.06);
+    --info-bg:#eef5ff; --info-text:#0058b0;
+    --hud:rgba(255,255,255,.9); --mapbg:#e9e9ee;
+    --good-bg:#e3f5e8; --good-text:#1c6b31; --warn-bg:#fff2e0; --warn-text:#8a4a00; --bad-bg:#ffe8e6; --bad-text:#a1120a;
+    /* the Driver's view cabin: light greys taken from a photo of a real one */
+    --cab-bg:#c9c6c1; --cab-visor:#d9d5cf; --cab-line:#b1aca5; --cab-door:#55585d; --cab-dash:#3c3f44;
+    --cab-dashtop:#c9c9cb; --cab-wheel:#2b2d31; --cab-wheel-hi:#4a4d53; --cab-text:#4a4a4f;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#000000; --panel:#1c1c1e; --panel2:#2c2c2e; --line:rgba(255,255,255,.12);
+      --text:#f5f5f7; --muted:#98989d; --accent:#0a84ff; --accent-soft:rgba(10,132,255,.18);
+      --green:#30a14e; --amber:#d9730d; --red:#e5342b; --purple:#bf5af2; --neutral:#48484a;
+      --header:rgba(22,22,23,.78); --seg:#2c2c2e; --seg-on:#636366; --track:#3a3a3c;
+      --shadow:0 1px 2px rgba(0,0,0,.5),0 4px 18px rgba(0,0,0,.35);
+      --info-bg:#0b2340; --info-text:#8cc4ff;
+      --hud:rgba(28,28,30,.9); --mapbg:#1c1c1e;
+      --good-bg:#10301a; --good-text:#8fe3a6; --warn-bg:#3a2608; --warn-text:#ffc777; --bad-bg:#3d0f0c; --bad-text:#ff9d95;
+      --cab-bg:#2c2c2e; --cab-visor:#3a3a3c; --cab-line:#545458; --cab-door:#1c1c1e; --cab-dash:#1c1c1e;
+      --cab-dashtop:#48484a; --cab-wheel:#0e0e10; --cab-wheel-hi:#3a3a3c; --cab-text:#c7c7cc;
+    }
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex;flex-direction:column;height:100vh;height:100dvh}
+
+  /* ---------- header + tabs ---------- */
+  header{display:flex;align-items:center;gap:14px;padding:8px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:17px;letter-spacing:.2px}
+  .brand .dot{width:10px;height:10px;border-radius:50%;background:#f5a623;box-shadow:0 0 8px #f5a623}
+  .tabs{display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:3px;margin-left:auto}
+  .tabs button{border:0;background:transparent;color:var(--muted);font:600 14px inherit;font-family:inherit;
+    padding:8px 14px;border-radius:8px;cursor:pointer}
+  .tabs button.sel{background:var(--panel2);color:var(--text)}
+
+  /* ---------- layout: side panel + map ---------- */
+  .app{flex:1;display:flex;flex-direction:column;min-height:0}
+  .side{display:flex;flex-direction:column;gap:10px;padding:12px 14px;overflow-y:auto}
+  .mapwrap{position:relative;flex:1;min-height:55vh;margin:0 12px 12px}
+  #map{position:absolute;inset:0;border-radius:14px;border:1px solid var(--line)}
+  @media (min-width:900px){
+    .app{flex-direction:row}
+    .side{width:410px;flex:none}
+    /* the divider between the panel and the map: drag it to resize the panel */
+    .splitter{flex:none;width:8px;margin:0 -4px;cursor:col-resize;position:relative;z-index:10;touch-action:none}
+    .splitter::after{content:"";position:absolute;top:0;bottom:0;left:3px;width:1px;background:var(--line);transition:background .15s,width .15s}
+    .splitter:hover::after,.splitter.drag::after{background:var(--accent);width:3px;left:2px}
+    .mapwrap{min-height:0;margin:12px}
+  }
+  /* phones: the page scrolls -- controls first, then a tall map -- instead of squeezing both into one screen */
+  @media (max-width:899px){
+    body{height:auto;min-height:100dvh}
+    .app{display:block}
+    .side{overflow:visible}
+    .mapwrap{height:65vh;min-height:0}
+    #tagline{display:none}
+    header{gap:8px}
+    .tabs{margin-left:0;width:100%;order:2}
+    #helpBtn{margin-left:auto;order:1}
+    .tabs button{flex:1;padding:8px 4px}
+    .splitter{display:none}
+    .side .stats{grid-template-columns:repeat(2,1fr)}
+  }
+
+  /* ---------- phones: one column, ordered per tab ----------
+     The panel and the open tab's section are flattened (display:contents), so
+     their parts and the map line up in one column and each tab orders them:
+     Plan = where/when, the MAP with the route, then results; Drive = an in-car
+     screen (navigation, big banner, small map, details folded away). */
+  #driveMoreBtn{display:none}
+  body[data-tab=drive] #driveMoreBtn{display:block}
+  #driveMore{display:none} #driveMore.open{display:flex;flex-direction:column;gap:10px}
+  .maphint{display:none}
+  @media (max-width:899px){
+    .app{display:flex;flex-direction:column;gap:10px;padding:10px 12px 16px}
+    .side{display:contents}
+    .side .pane.on{display:contents}
+    .app>*, .side>*, .pane>*{order:50}
+    .mapwrap{margin:0;height:50vh;flex:none}
+    input[type=text],input[type=date],input[type=number],select{font-size:16px}
+    button{min-height:44px}
+    .linkbtn,.chip{min-height:0}
+    #navCard{order:2}
+
+    body[data-tab=plan] #planWhere{order:3}  body[data-tab=plan] #planFrom{order:4}  body[data-tab=plan] #planTo{order:5}
+    body[data-tab=plan] #whenBar{order:6}    body[data-tab=plan] .mapwrap{order:7}
+    body[data-tab=plan] #planResults{order:8} body[data-tab=plan] #alts{order:9}
+    body[data-tab=plan] #timingTip{order:10} body[data-tab=plan] #planReplay{order:11} body[data-tab=plan] #note{order:14}
+    body[data-tab=plan] #planExamples{order:15} body[data-tab=plan] #viewCard{order:16} body[data-tab=plan] #sensCard{order:17}
+    /* watching a drive: the windshield comes up under a shorter map, next to the replay controls */
+    body.replaying[data-tab=plan] .mapwrap{height:38vh}
+    body.replaying[data-tab=plan] .mapwrap{order:3} body.replaying[data-tab=plan] #viewCard{order:4} body.replaying[data-tab=plan] #planReplay{order:5}
+    body.replaying[data-tab=plan] #planWhere, body.replaying[data-tab=plan] #planFrom, body.replaying[data-tab=plan] #planTo,
+    body.replaying[data-tab=plan] #whenBar{order:30}
+
+    /* Highway glare: Play the day sits right above the map; the download goes to the very bottom */
+    body[data-tab=map] #hAgency{order:3} body[data-tab=map] #whenBar{order:4} body[data-tab=map] #hDisplay{order:5}
+    body[data-tab=map] #hPlayCard{order:6} body[data-tab=map] .mapwrap{order:7} body[data-tab=map] #hTapCard{order:8}
+    body[data-tab=map] #hExportCard{order:9}
+
+    body[data-tab=drive] #banner{order:3} body[data-tab=drive] #startBtn{order:4}
+    body[data-tab=drive] .mapwrap{order:5;height:30vh} body[data-tab=drive] #endDriveBtn{order:6}
+    body[data-tab=drive] #driveMoreBtn{order:7} body[data-tab=drive] #driveMore{order:8}
+    body[data-tab=drive] #viewCard{order:9} body[data-tab=drive] #sensCard{order:10}
+    body[data-tab=drive] .banner{padding:26px 14px}
+    body[data-tab=drive] .banner .state{font-size:60px}
+    body[data-tab=drive] .banner .sub{font-size:17px}
+    body[data-tab=drive] #startBtn{padding:18px;font-size:18px}
+    .navarrow{font-size:46px;width:56px} .navdist{font-size:28px} .navtext{font-size:16px} .navglare{font-size:16px;padding:10px 12px}
+
+    /* the replay panel over the map: a compact strip on a phone (the windshield below carries the rest) */
+    .mapwrap .hud{left:8px;right:8px;top:auto;bottom:22px;min-width:0;padding:6px 9px;font-size:11px}
+    .mapwrap .hud .hs{font-size:15px;padding:2px 6px;margin-bottom:3px}
+    #hudTimes, .hud .hleg, .hud .small.muted, .hud .hrow:has(#hudEl), .hud .hrow:has(#hudCloud), .hud .hrow:has(#hudProg){display:none}
+    .maphint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:600;background:rgba(0,0,0,.72);
+      color:#fff;font-size:14px;padding:8px 12px;border-radius:9px;pointer-events:none;opacity:0;transition:opacity .2s;display:block}
+    .maphint.show{opacity:1}
+  }
+  /* a phone on its side in the car: banner + navigation left, map right */
+  @media (max-width:899px) and (orientation:landscape) and (max-height:520px){
+    header{padding:4px 10px} .brand{font-size:15px}
+    body[data-tab=drive] .app{display:grid;grid-template-columns:1fr 1fr;column-gap:12px;row-gap:8px;align-content:start}
+    body[data-tab=drive] .mapwrap{grid-column:2;grid-row:1 / span 30;height:calc(100dvh - 70px);position:sticky;top:8px}
+    body[data-tab=drive] .app>*:not(.mapwrap), body[data-tab=drive] .side>*, body[data-tab=drive] .pane>*{grid-column:1}
+    body[data-tab=drive] .banner{padding:14px 10px} body[data-tab=drive] .banner .state{font-size:44px}
+  }
+  .side,.card,.pane,.row>*{min-width:0}
+  .pane{display:none;flex-direction:column;gap:10px}
+  .pane.on{display:flex}
+
+  /* ---------- controls ---------- */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+  .row{display:flex;gap:8px;align-items:center}
+  label.k,.k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+  input[type=text],input[type=date],input[type=number],select{background:var(--panel2);border:1px solid var(--line);
+    color:var(--text);padding:9px 10px;border-radius:9px;font-size:14px;font-family:inherit;min-width:0}
+  input[type=text]{flex:1}
+  input[type=range]{flex:1;accent-color:#f5a623;min-width:0}
+  button{border:1px solid var(--line);background:var(--panel2);color:var(--text);font:600 14px inherit;font-family:inherit;
+    padding:9px 12px;border-radius:9px;cursor:pointer}
+  button:active{transform:scale(.98)} button:disabled{opacity:.5;cursor:default}
+  button.primary{background:var(--green);border-color:transparent}
+  button.ghost{background:transparent}
+  button.on{background:var(--green);border-color:transparent}
+  /* Settings are switches, not buttons: a button DOES something (Play), a
+     switch CHANGES how things are shown. Different looks so they aren't confused. */
+  .switch{display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;user-select:none;white-space:nowrap;flex:none}
+  .switch input{appearance:none;-webkit-appearance:none;width:36px;height:20px;border-radius:10px;margin:0;flex:none;
+    background:var(--line);position:relative;cursor:pointer;transition:background .15s}
+  .switch input::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+    background:#aab4c4;transition:left .15s,background .15s}
+  .switch input:checked{background:var(--green)}
+  .switch input:checked::after{left:18px;background:#fff}
+  .switch input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .linkbtn{background:none;border:0;padding:2px 0;color:var(--accent);font:inherit;font-size:13px;cursor:pointer;
+    text-decoration:underline;text-underline-offset:3px;text-align:left}
+  button.demo-on{outline:2px solid var(--accent);outline-offset:2px}
+  button.demo-on::before{content:"\25B6\00a0"}
+  .glarelabel{background:rgba(11,15,23,.9);color:#fff;border:1px solid #e63c3c;border-radius:8px;font:600 12px system-ui,sans-serif;
+    padding:4px 8px;box-shadow:none;white-space:nowrap}
+  .glarelabel::before{display:none}
+  .opts{display:flex;flex-direction:column;gap:8px;margin-top:9px;padding-top:9px;border-top:1px solid var(--line)}
+  .tval{font-variant-numeric:tabular-nums;font-weight:700;font-size:16px;min-width:58px;text-align:right}
+  .muted{color:var(--muted)} .small{font-size:12px;line-height:1.5}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font-size:12px;padding:6px 10px;border-radius:20px;background:var(--panel2)}
+  .chip.worst{background:var(--bad-bg);color:var(--bad-text)}
+  .legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px;color:var(--muted);align-items:center}
+  .legend i{display:inline-block;width:16px;height:5px;border-radius:3px;margin-right:5px;vertical-align:middle}
+  .status{font-size:12px;color:var(--muted);line-height:1.5;margin-top:auto;padding-top:4px}
+
+  /* ---------- plan ---------- */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:7px 8px}
+  .stat .v{font-size:16px;font-weight:700;margin-top:2px}
+  .alts{display:flex;flex-direction:column;gap:6px}
+  .alt{display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;padding:9px 11px;font-size:13px;cursor:pointer}
+  .alt.sel{border-color:var(--accent)} .alt .meta{color:var(--muted)} .alt .exp{font-weight:700;white-space:nowrap}
+  .hot{background:var(--red);color:#fff;border-radius:50%;width:22px;height:22px;display:flex;
+    align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid #fff}
+
+  /* ---------- drive banner + tiles ---------- */
+  .banner{border-radius:16px;background:var(--neutral);padding:18px 14px;text-align:center;transition:background .25s}
+  .banner.green{background:var(--green)} .banner.amber{background:var(--amber)}
+  .banner.red{background:var(--red)} .banner.neutral{background:var(--neutral)}
+  .banner .state{font-size:38px;font-weight:800;line-height:1.05;margin:0}
+  .banner .sub{font-size:14px;opacity:.92;margin-top:5px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:8px 10px}
+  .tile .v{font-size:19px;font-weight:700;margin-top:2px} .tile .u{font-size:12px;color:var(--muted);font-weight:400}
+
+  /* ---------- replay HUD over the map ---------- */
+  .hud{position:absolute;left:54px;top:10px;z-index:500;display:none;min-width:210px;
+    background:rgba(11,15,23,.88);border:1px solid var(--line);border-radius:12px;padding:9px 11px;font-size:12px}
+  .hud.on{display:block}
+  .hud .hs{font-size:22px;font-weight:800;border-radius:8px;padding:4px 8px;margin-bottom:6px;text-align:center}
+  .hud .hrow{display:flex;justify-content:space-between;gap:10px;color:var(--muted)} .hud .hrow b{color:var(--text)}
+  .hud .hleg{margin-top:6px;color:var(--muted);font-size:11px} .hud .hleg i{display:inline-block;width:12px;height:4px;border-radius:2px;margin:0 3px 0 6px;vertical-align:middle}
+  .hud .hleg i:first-child{margin-left:0}
+
+  /* ---------- driver's view ---------- */
+  #viewSvg{display:block;width:100%;height:auto;margin-top:6px;border-radius:10px}
+  /* desktop: the Driver's view stays pinned at the top of the panel while the rest scrolls */
+  @media (min-width:900px){ #viewCard{position:sticky;top:-12px;z-index:5;box-shadow:0 6px 14px rgba(0,0,0,.45)} }
+  .vpill{flex:none;font-weight:800;font-size:13px;border-radius:7px;padding:3px 9px;background:var(--neutral)}
+  #sensBox summary{cursor:pointer;color:var(--muted)}
+  .seg{display:flex;gap:4px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:3px}
+  .seg button{flex:1;border:0;background:transparent;color:var(--muted);padding:6px 4px;font-size:13px}
+  .seg button.on{background:var(--green);color:#fff}
+  /* ---------- navigation card ---------- */
+  .navarrow{font-size:38px;line-height:1;width:46px;text-align:center;font-weight:700}
+  .navdist{font-size:22px;font-weight:800}
+  .navtext{font-size:14px;color:var(--text);margin-top:2px}
+  .navglare{margin-top:9px;border-radius:9px;padding:8px 10px;font-weight:700;font-size:14px}
+  .navglare.clear{background:var(--good-bg);color:var(--good-text)} .navglare.later{background:var(--warn-bg);color:var(--warn-text)}
+  .navglare.soon{background:var(--bad-bg);color:var(--bad-text)} .navglare.now{background:var(--red);color:#fff}
+  #viewSvg .vgrip-ew{cursor:ew-resize;touch-action:none} #viewSvg .vgrip-ns{cursor:ns-resize;touch-action:none}
+  #viewSvg.dragging{cursor:grabbing}
+
+  .leaflet-container{background:var(--mapbg)}
+
+  /* ================= the system look (overrides the base rules above) ================= */
+  body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",Inter,"Segoe UI",Roboto,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;letter-spacing:-.01em}
+  header{position:sticky;top:0;z-index:1100;background:var(--header);backdrop-filter:saturate(180%) blur(20px);
+    -webkit-backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid var(--line)}
+  .brand{font-weight:600;font-size:18px;letter-spacing:-.02em}
+  .brand .dot{background:#ff9f0a;box-shadow:none}
+  #tagline{color:var(--muted)}
+  .tabs{background:var(--seg);border:0;border-radius:10px;padding:2px}
+  .tabs button{border-radius:8px;color:var(--text);font-weight:500;padding:7px 14px}
+  .tabs button.sel{background:var(--seg-on);box-shadow:0 1px 3px rgba(0,0,0,.12),0 0 0 .5px rgba(0,0,0,.04)}
+  @media (min-width:900px){ .side{border-right:0} }
+  .card,.stat,.tile,.alt{background:var(--panel);border:0;box-shadow:var(--shadow)}
+  .card{border-radius:18px;padding:14px 16px}
+  .stat,.tile,.alt{border-radius:14px}
+  .alt.sel{box-shadow:0 0 0 2px var(--accent),var(--shadow)}
+  .card.info{background:var(--info-bg);box-shadow:none} .card.info .k{color:var(--info-text)}
+  #timingTip,#navCard{box-shadow:0 0 0 1.5px var(--accent),var(--shadow);border:0!important}
+  label.k,.k{font-size:11.5px;font-weight:600;letter-spacing:.03em;color:var(--muted)}
+  input[type=text],input[type=date],input[type=number],select{background:var(--panel2);border:1px solid transparent;border-radius:10px}
+  input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+  input[type=range]{accent-color:var(--accent)}
+  button{background:var(--seg);border:0;border-radius:980px;font-weight:500;color:var(--text)}
+  button:hover:not(:disabled){filter:brightness(.96)}
+  button.primary{background:var(--accent);color:#fff}
+  button.ghost{background:transparent;color:var(--accent)}
+  button.on{background:var(--green);color:#fff}
+  .linkbtn{color:var(--accent);text-decoration:none} .linkbtn:hover{text-decoration:underline}
+  .switch input{background:var(--track)} .switch input::after{background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+  .switch input:checked{background:#34c759}
+  .chip{background:var(--seg);color:var(--text);border:0;border-radius:980px;padding:7px 12px}
+  .seg{background:var(--seg);border:0;border-radius:10px;padding:2px}
+  .seg button{border-radius:8px;color:var(--text);min-height:0}
+  .seg button.on{background:var(--seg-on);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+  .banner{border-radius:22px;box-shadow:var(--shadow)}
+  .banner.neutral{background:var(--neutral)}
+  .banner,.banner.green,.banner.amber,.banner.red,.banner.neutral{color:#fff}
+  .vpill{color:#fff}
+  .hud{background:var(--hud);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:0;box-shadow:var(--shadow);color:var(--text);border-radius:14px}
+  .hud .hrow b{color:var(--text)} .hud .hs{color:#fff}
+  .glarelabel{background:var(--panel);color:var(--text);border:1.5px solid #e63c3c;box-shadow:var(--shadow)}
+  #map{border:0;border-radius:18px;box-shadow:var(--shadow)}
+  .navglare{border-radius:12px}
+  details summary{list-style-position:inside}
+  @media (min-width:900px){ #viewCard{box-shadow:var(--shadow),0 8px 24px rgba(0,0,0,.08)} }
+  .status,.muted{color:var(--muted)}
+  /* night: the bright map is the one thing left glaring in a dark car */
+  @media (prefers-color-scheme: dark){ .leaflet-tile-pane{filter:brightness(.78) contrast(1.05)} }
+  /* ================= Apple type system (2026-10-17): display headlines, regular subheads, blue links ================= */
+  :root{--link:#0066cc;--sub:#6e6e73;
+    --display:"SF Pro Display",-apple-system,BlinkMacSystemFont,Inter,"Helvetica Neue",Helvetica,Arial,sans-serif;
+    --textf:"SF Pro Text",-apple-system,BlinkMacSystemFont,Inter,"Helvetica Neue",Helvetica,Arial,sans-serif}
+  @media (prefers-color-scheme: dark){ :root{--link:#2997ff;--sub:#86868b;--muted:#86868b} }
+  body{font-family:var(--textf);font-size:15px;line-height:1.47;letter-spacing:-.011em}
+  .side{gap:14px}
+  .card{padding:18px 20px;border-radius:20px}
+  .eyebrow{margin:0 0 6px;font-size:13px;font-weight:600;color:var(--sub);letter-spacing:-.005em}
+  .headline{margin:0;font-family:var(--display);font-size:30px;line-height:1.08;font-weight:700;letter-spacing:-.03em;color:var(--text)}
+  .headline.xl{font-size:36px}
+  .subhead{margin:10px 0 0;font-size:17px;line-height:1.42;font-weight:400;color:var(--sub);letter-spacing:-.016em}
+  .card-title{margin:0;font-family:var(--display);font-size:19px;line-height:1.2;font-weight:600;letter-spacing:-.022em;color:var(--text)}
+  .card-sub{margin:3px 0 0;font-size:14px;line-height:1.4;color:var(--sub)}
+  .ctas{display:flex;align-items:center;flex-wrap:wrap;gap:12px 22px;margin-top:18px}
+  .cta{background:none;border:0;padding:0;min-height:0;border-radius:0;font:inherit;font-size:17px;font-weight:400;color:var(--link);cursor:pointer}
+  .cta::after{content:"\00a0\203A"}
+  .cta:hover{text-decoration:underline;filter:none}
+  button{font-weight:400}
+  button.pill{padding:11px 22px;font-size:17px}
+  button.primary{font-weight:400}
+  .linkbtn,button.ghost{color:var(--link)}
+  label.k,.k{text-transform:none;font-size:13px;font-weight:500;letter-spacing:-.005em;color:var(--sub)}
+  .small{font-size:13px;line-height:1.45}
+  .stat .v,.tile .v,.tval,.navdist{font-family:var(--display);letter-spacing:-.02em}
+  .stat .v{font-size:20px}
+  .banner .state{font-family:var(--display);font-weight:700;letter-spacing:-.035em}
+  .banner .sub{font-size:17px}
+  .hero{padding:24px 22px}
+  .hero .x{margin:-6px -8px 0 0;padding:4px 10px;font-size:20px;line-height:1;color:var(--sub);min-height:0}
+  .mods{display:grid;grid-template-columns:1fr;gap:8px;margin-top:20px}
+  .mod{background:var(--panel2);border-radius:14px;padding:12px}
+  .mod b{display:block;font-family:var(--display);font-size:15px;font-weight:600;letter-spacing:-.015em}
+  .mod span{display:block;margin-top:3px;font-size:12.5px;line-height:1.38;color:var(--sub)}
+  .facts{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:18px}
+  .fact{background:var(--panel2);border-radius:14px;padding:14px}
+  .fact b{display:block;font-family:var(--display);font-size:32px;line-height:1;font-weight:700;letter-spacing:-.035em;color:var(--text)}
+  .fact span{display:block;margin-top:6px;font-size:13px;line-height:1.38;color:var(--sub)}
+  .more{margin-top:16px}
+  .more p{margin:12px 0 0}
+  #hAgency.card.info{background:var(--panel);box-shadow:var(--shadow)}
+  #timingTip,#navCard{box-shadow:var(--shadow)}
+  /* From / To sit on the page background, not in a card: give them the card colour so they read as fields */
+  #planFrom input,#planTo input{background:var(--panel);box-shadow:var(--shadow);border:1px solid var(--line)}
+  #planFrom input:focus,#planTo input:focus{border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+  /* place suggestions under From / To (suggestBox in js/plan.js) */
+  .suggest{position:absolute;top:calc(100% + 4px);z-index:1200;background:var(--panel);border-radius:14px;
+    box-shadow:0 12px 32px rgba(0,0,0,.16);padding:6px;max-height:300px;overflow:auto}
+  .suggest[hidden]{display:none}
+  .suggest .sg{padding:8px 10px;border-radius:9px;cursor:pointer;line-height:1.3}
+  .suggest .sg b{display:block;font-weight:500;font-size:14px}
+  .suggest .sg span{display:block;font-size:12.5px;color:var(--sub)}
+  .suggest .sg:hover,.suggest .sg.hi{background:var(--seg)}
+  /* example drives on Plan a trip: small cards, not chips */
+  .excards{display:flex;flex-direction:column;gap:8px}
+  button.excard{display:block;position:relative;width:100%;text-align:left;border:0;border-radius:14px;min-height:0;
+    padding:12px 34px 12px 14px;background:var(--panel);box-shadow:var(--shadow);color:var(--text);cursor:pointer}
+  button.excard::after{content:"\203A";position:absolute;right:14px;top:50%;transform:translateY(-50%);font-size:22px;color:var(--sub)}
+  button.excard:hover{filter:none;box-shadow:0 0 0 1.5px var(--accent),var(--shadow)}
+  .excard .ex-eye{display:block;font-size:12px;font-weight:600;color:var(--sub)}
+  .excard.worst .ex-eye{color:var(--red)}
+  .excard b{display:block;margin-top:2px;font-family:var(--display);font-size:15px;font-weight:600;letter-spacing:-.015em}
+  .excard .ex-meta{display:block;margin-top:2px;font-size:13px;color:var(--sub)}
+  /* the welcome sheet: above every tab, not inside one */
+  .sheet{position:fixed;inset:0;z-index:2000;display:flex;align-items:center;justify-content:center;padding:24px;
+    background:rgba(0,0,0,.32);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);animation:sheetFade .25s ease}
+  .sheet[hidden]{display:none}
+  .sheet-card{width:100%;max-width:460px;max-height:calc(100dvh - 48px);overflow-y:auto;
+    box-shadow:0 24px 60px rgba(0,0,0,.25)!important;animation:sheetUp .3s cubic-bezier(.2,.8,.2,1)}
+  @keyframes sheetFade{from{opacity:0}} @keyframes sheetUp{from{transform:translateY(16px) scale(.98);opacity:0}}
+  button.mod{display:block;position:relative;width:100%;text-align:left;border:0;cursor:pointer;color:var(--text);min-height:0;padding-right:34px}
+  button.mod::after{content:"\203A";position:absolute;right:14px;top:50%;transform:translateY(-50%);font-size:22px;color:var(--sub)}
+  button.mod:hover{filter:none;background:var(--seg)}
+  /* phones: a sheet that slides up from the bottom */
+  @media (max-width:899px){
+    .sheet{align-items:flex-end;padding:0}
+    .sheet-card{max-width:none;border-radius:22px 22px 0 0;max-height:92dvh;padding-bottom:calc(24px + env(safe-area-inset-bottom))}
+    @keyframes sheetUp{from{transform:translateY(100%)}}
+  }
+  @media (max-width:420px){ .headline.xl{font-size:32px} }
+  /* ================= desktop: the panel holds controls, the map holds what you look at (2026-10-17) =================
+     Parts marked data-dock move onto the map on a desktop (initDock in js/app.js) and back into the
+     page on a phone, where the one-column order above still applies. */
+  .mtools{position:absolute;top:10px;right:10px;z-index:1000;display:none;gap:8px;align-items:flex-start}
+  .docked .mtools{display:flex}
+  .mbtn{background:var(--hud);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:var(--shadow);
+    color:var(--text);border-radius:980px;padding:8px 14px;font-size:14px;min-height:0}
+  .mbtn.on{background:var(--text);color:var(--bg)}
+  body[data-tab=map] #setBtn, body[data-tab=drive] #layersBtn{display:none}
+  .mpop{position:absolute;top:46px;right:0;width:330px;max-height:calc(100vh - 150px);overflow:auto;background:var(--panel);
+    border-radius:18px;box-shadow:0 12px 40px rgba(0,0,0,.18);padding:16px 18px}
+  .mpop[hidden]{display:none}
+  #dockSettings .card{background:none;box-shadow:none;padding:0;border-radius:0}
+  #dockSettings #sensBox>summary{display:none}
+  #dockSettings .seg{margin-top:0!important}
+  #dockLayers .switch{display:flex}
+  .docked #hDisplay{display:none} body[data-tab=map].docked #hDisplay{display:block;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+  .docked #hWx{display:none}
+  #dockView{position:absolute;left:10px;bottom:24px;z-index:1000;width:340px;max-height:calc(100% - 70px);overflow:auto;border-radius:20px}
+  #dockView.big{width:500px}
+  #dockView #viewCard{position:static;margin:0;box-shadow:0 12px 40px rgba(0,0,0,.18)}
+  #vSize{display:none} .docked #vSize{display:inline-block}
+  #dockLegend{position:absolute;right:10px;bottom:24px;z-index:900;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none}
+  .docked #planLegend,.docked #hLegend{display:none;margin:0!important;max-width:420px;background:var(--hud);backdrop-filter:blur(16px);
+    -webkit-backdrop-filter:blur(16px);box-shadow:var(--shadow);border-radius:12px;padding:8px 12px;pointer-events:auto}
+  body.has-route[data-tab=plan].docked #planLegend, body[data-tab=map].docked #hLegend{display:flex}
+
+  /* route cards: the one you picked opens up and carries the buttons */
+  .alt{display:block;padding:12px 14px}
+  .alt-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .alt-name{font-weight:500}
+  .alt-min{font-family:var(--display);font-size:17px;font-weight:600;letter-spacing:-.02em;white-space:nowrap}
+  .alt-sub{margin-top:2px;font-size:13px;color:var(--sub)}
+  .alt-glare.bad{color:var(--red)} .alt-glare.ok{color:var(--green)}
+  .alt.sel{padding:16px}
+  .alt.sel .alt-min{font-size:24px;font-weight:700}
+  .alt.sel #planActions{margin-top:14px}
+  #planActions .cta{font-size:15px}
+  .cta:disabled::after{content:""}
+  #planReplay{display:none!important} body.replaying #planReplay{display:flex!important}
+  .tipline{display:block;width:100%;text-align:left;border:0;border-radius:14px;padding:12px 34px 12px 14px;position:relative;
+    background:var(--accent-soft);color:var(--text);min-height:0;font-size:14px;cursor:pointer}
+  .tipline::after{content:"\203A";position:absolute;right:14px;top:50%;transform:translateY(-50%);font-size:22px;color:var(--link)}
+  .tipline .ex-eye{display:block;font-size:12px;font-weight:600;color:var(--link)}
+  .tipline:hover{filter:none}
+  /* examples: the way in; once a route is up they fold to one link */
+  #exToggle{display:none}
+  body.has-route #planExamples>.k{display:none}
+  body.has-route #exToggle{display:inline}
+  body.has-route #planExamples:not(.open) #examples{display:none}
+  body.has-route #planExamples.open #examples{margin-top:8px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="dot"></span>SolGuard</div>
+  <span class="small muted" id="tagline">See the glare before it sees you.</span>
+  <nav class="tabs">
+    <button id="tab-plan" data-tab="plan">Drive</button>
+    <button id="tab-map" data-tab="map" title="For Caltrans, counties and cities">Highway glare</button>
+  </nav>
+  <button id="helpBtn" class="ghost" style="padding:6px 11px" title="What is SolGuard?">?</button>
+</header>
+
+    <!-- first visit: what this is and where to start. Judges open the link with nobody narrating. -->
+<div class="sheet" id="welcome" role="dialog" aria-modal="true" aria-labelledby="welcomeTitle" hidden>
+  <div class="sheet-card card hero">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <p class="eyebrow">New to SolGuard</p>
+        <button id="welcomeX" class="ghost x" aria-label="Close">&times;</button>
+      </div>
+      <h1 class="headline xl" id="welcomeTitle">The sun.<br>Out of your eyes.</h1>
+      <p class="subhead">A low sun dead ahead blinds drivers. Visors can't stop it. SolGuard sees it coming. And finds the way around.</p>
+      <div class="ctas">
+        <button id="demoBtn" class="primary pill">Watch a drive</button>
+        <button id="welcomeMore" class="cta" aria-expanded="false">Learn more</button>
+      </div>
+      <div class="more" id="welcomeInfo" hidden>
+        <p class="small muted">The demo: El Cajon to Ocean Beach on I-8. Sunset. Thirty seconds. Watch the route turn red and the windshield fill with sun.</p>
+        <p class="small muted">How it works: the sun's position, every second. Your heading. Hills and buildings in the way.
+          Sun low, in your eyeline, under the visor? That's glare.</p>
+      </div>
+      <div class="mods">
+        <button class="mod" data-go="plan"><b>Drive</b><span>Your route, in colour. Red is glare. Then drive it.</span></button>
+        <button class="mod" data-go="map"><b>Highway glare</b><span>Every state highway. A year of data. For agencies.</span></button>
+      </div>
+    </div>
+</div>
+
+<div class="app">
+  <aside class="side">
+
+    <!-- navigation (js/nav.js): next turn + the glare ahead; shown while driving or replaying a planned route -->
+    <div class="card" id="navCard" style="display:none;border-color:var(--accent)">
+      <div class="row" style="align-items:center;gap:12px">
+        <div class="navarrow" id="navArrow">&uarr;</div>
+        <div style="flex:1;min-width:0">
+          <div class="navdist" id="navDist">--</div>
+          <div class="navtext" id="navText">--</div>
+        </div>
+      </div>
+      <div class="navglare clear" id="navGlare">--</div>
+      <div class="row" style="margin-top:8px;gap:12px">
+        <button id="navMute" class="ghost" style="padding:5px 10px;font-size:12px">Voice on</button>
+        <a id="navGmaps" class="linkbtn" target="_blank" rel="noopener" href="#">Open in Google Maps</a>
+        <button id="navEnd" class="ghost" style="margin-left:auto;padding:5px 10px;font-size:12px">End</button>
+      </div>
+      <div class="small muted" id="navNote" style="margin-top:4px"></div>
+    </div>
+    <!-- driver's view: the windshield with the classifier's glare zones, and the sensitivity setting -->
+    <div class="card" id="viewCard" data-dock="dockView">
+      <div class="row" style="justify-content:space-between;align-items:baseline">
+        <h2 class="card-title">Driver's view</h2>
+        <span>
+          <button id="vSize" class="ghost" style="padding:3px 8px;font-size:13px;min-height:0" title="Bigger">Bigger</button>
+          <button id="viewToggle" class="ghost" style="padding:3px 10px;font-size:13px;min-height:0">Hide</button>
+        </span>
+      </div>
+      <p class="card-sub">Your windshield. Red is where the sun blinds.</p>
+      <div id="viewBody">
+        <svg id="viewSvg" viewBox="0 0 400 300" role="img" aria-label="Windshield view with the sun and the glare zones"></svg>
+        <div class="row" style="align-items:flex-start;margin-top:6px">
+          <span class="vpill" id="vState">--</span>
+          <span class="small" id="vWhy" style="flex:1"></span>
+        </div>
+        <div class="small muted" style="margin-top:4px">Drag the edges and the visor line. Make it your car.</div>
+        <div class="row" id="vPreviewRow" style="margin-top:8px">
+          <label class="k" for="vFacing" style="min-width:46px">Facing</label>
+          <input type="range" id="vFacing" min="0" max="359" step="1" value="270" aria-label="Direction the car faces"/>
+          <span class="tval" id="vFacingV" style="min-width:64px">--</span>
+          <button id="vFaceSun" class="ghost" style="padding:5px 9px;font-size:12px" title="Point the car straight at the sun">Face sun</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- glare sensitivity: its own card, so the Driver's view above stays in sight while you change it -->
+    <div class="card" id="sensCard" data-dock="dockSettings">
+        <details id="sensBox">
+          <summary class="small">Glare sensitivity: <b id="sensName">Standard</b></summary>
+          <div class="seg" style="margin-top:8px">
+            <button data-sens="less">Less</button><button data-sens="standard">Standard</button><button data-sens="more">More</button>
+          </div>
+          <div class="row" style="margin-top:8px"><label class="k" for="sLeft" style="min-width:86px">Glare, left</label>
+            <input type="range" id="sLeft" min="4" max="30" step="1"/><span class="tval" id="sLeftV"></span></div>
+          <div class="row" style="margin-top:6px"><label class="k" for="sRight" style="min-width:86px">Glare, right</label>
+            <input type="range" id="sRight" min="4" max="30" step="1"/><span class="tval" id="sRightV"></span></div>
+          <div class="row" style="margin-top:6px"><label class="k" for="sVisor" style="min-width:86px">Visor line</label>
+            <input type="range" id="sVisor" min="5" max="30" step="1"/><span class="tval" id="sVisorV"></span></div>
+          <div class="row" style="margin-top:6px"><label class="k" for="sHold" style="min-width:86px">Must last</label>
+            <input type="range" id="sHold" min="0" max="10" step="1"/><span class="tval" id="sHoldV"></span></div>
+          <div class="small muted" id="sensNote" style="margin-top:6px"></div>
+        </details>
+    </div>
+
+
+    <!-- shared date + time: Plan uses it as the departure, the Glare map as "the moment shown" -->
+    <div class="card" id="whenBar">
+      <div class="row">
+        <label class="k" for="wDate" id="wLabel" style="min-width:38px">When</label>
+        <input type="date" id="wDate" style="flex:1"/>
+        <button id="wNow" class="ghost" title="Jump to the current date and time">Now</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input type="range" id="wTime" min="0" max="1435" step="5" value="1020" aria-label="Time of day"/>
+        <span class="tval" id="wTimeV">17:00</span>
+      </div>
+      <div class="small muted" id="wSun" style="margin-top:4px"></div>
+    </div>
+
+
+    <!-- ===================== PLAN ===================== -->
+    <section class="pane" id="pane-plan">
+      <div class="row" id="planWhere" style="justify-content:space-between;align-items:baseline">
+        <h2 class="card-title">Where to?</h2>
+        <button id="justDriveBtn" class="cta" style="font-size:15px" title="Live glare warnings without a destination">Just drive</button>
+      </div>
+      <div class="row" id="planFrom">
+        <input id="fromIn" type="text" placeholder="From: a place or address"/>
+        <button id="gpsBtn" class="ghost" title="Use my current location">My location</button>
+      </div>
+      <div class="row" id="planTo">
+        <input id="toIn" type="text" placeholder="To: a place, an address, or tap the map"/>
+        <button id="planBtn" class="primary" disabled>Plan</button>
+      </div>
+      <div id="planExamples">
+        <div class="k" style="margin-bottom:6px">Or try one.</div>
+        <button id="exToggle" class="cta" style="font-size:15px">Try an example</button>
+        <div class="excards" id="examples"></div>
+      </div>
+      <div id="planResults" style="display:none;flex-direction:column;gap:10px">
+      <h2 class="card-title" style="margin-top:4px">Your trip</h2>
+      <label class="switch" data-dock="dockLayers" title="Use real cloud cover for the chosen date"><input type="checkbox" class="wx-switch" checked/> Real weather</label>
+      <div class="legend" id="planLegend" data-dock="dockLegend">
+        <span><i style="background:var(--green)"></i>Clear</span>
+        <span><i style="width:40px;background:linear-gradient(90deg,#b3791a,#c42c2c)"></i>Glare</span>
+        <span><i style="background:#5b7db1"></i>Shaded</span>
+        <span><span class="hot" style="display:inline-flex;width:16px;height:16px;font-size:10px;margin-right:4px">!</span>Glare zone</span>
+      </div>
+      </div>
+      <!-- route cards (renderAlts): the selected one carries the buttons -->
+      <div class="alts" id="alts"></div>
+      <!-- timing tip: one line under the routes; leaving at another time often beats any detour -->
+      <div id="timingTip" style="display:none">
+        <button id="timingUse" class="tipline"><span class="ex-eye">Best fix</span><span id="timingText"></span></button>
+      </div>
+      <div id="planActions" style="display:none">
+        <div class="row">
+          <button id="navBtn" class="primary" style="flex:1">Drive this route</button>
+          <button id="watchBtn" style="flex:1">Watch this drive</button>
+        </div>
+        <div class="row" style="margin-top:12px;justify-content:space-between;flex-wrap:wrap">
+          <button id="shadierBtn" class="cta">Find a shadier route</button>
+          <span class="small muted" id="detourRow" style="display:none">detour up to
+            <input id="detourMin" type="number" min="0" max="60" step="5" value="10" style="width:58px;padding:4px 6px"/> min</span>
+        </div>
+      </div>
+      <div class="row" id="planReplay" style="display:none">
+        <button class="rp-pause" disabled style="flex:1">Pause</button>
+        <button class="rp-stop" disabled style="flex:1">Stop</button>
+      </div>
+      <div class="small muted" id="note">Pick a start and a destination. Or tap the map. Or try an example.</div>
+    </section>
+
+    <!-- ===================== GLARE MAP ===================== -->
+    <section class="pane" id="pane-map">
+      <!-- who this tab is for -->
+      <div class="card hero" id="hAgency">
+        <p class="eyebrow">For Caltrans, counties and cities</p>
+        <h2 class="headline">Every highway.<br>Every low sun.</h2>
+        <p class="subhead">Where glare hits California's state highways. When. And how many drivers it reaches.</p>
+        <div class="ctas">
+          <button id="hWhy" class="cta" aria-expanded="false">Why it matters</button>
+          <button id="hToData" class="cta">Get the data</button>
+        </div>
+        <div class="more" id="hWhyBox" hidden>
+          <div class="facts" style="margin-top:0">
+            <div class="fact"><b>0</b><span>Sun-glare programs at Caltrans or FHWA today.</span></div>
+            <div class="fact"><b>63%</b><span>Of the driving into a low sun happens on 6% of highway miles.</span></div>
+            <div class="fact"><b>4&times;</b><span>The rate of glare-coded fatal crashes on those hotspots.</span></div>
+            <div class="fact"><b>365</b><span>Days modelled. Every stretch. Both directions.</span></div>
+          </div>
+          <p class="small muted">Glare crashes are spread thin. Fixing where crashes piled up misses them. FHWA's systemic safety
+            approach ranks risk instead. This is that data: the peak month and the clock window say when to warn; the rank says where to start.</p>
+          <p class="small muted">Today: brighter signal backplates, everywhere. One seasonal warning on I-70 in Colorado. Nothing statewide.
+            Crash check: NHTSA FARS, 2015&ndash;2024. Small numbers. Not used to build the ranking.</p>
+        </div>
+      </div>
+      <!-- display setting for EVERYTHING on this tab: kept outside both boxes so it reads as global -->
+      <div id="hDisplay" data-dock="dockLayers">
+        <div class="k" style="margin-bottom:6px">Map display</div>
+        <label class="switch"><input type="checkbox" id="hTraffic" checked/> Show traffic</label>
+        <div class="small muted" id="hTrafficNote" style="margin:3px 0 0 45px">Thicker line, busier road. Caltrans counts.</div>
+      </div>
+
+      <div class="card" id="hPlayCard">
+        <h3 class="card-title" style="margin-bottom:10px">The day, in glare.</h3>
+        <div class="row">
+          <button id="hPlay" class="primary" style="flex:1">Play the day</button>
+          <span class="tval" id="hCount" title="km of state highway in glare in view">--</span>
+        </div>
+        <label class="switch" id="hWx" style="margin-top:9px" title="Use real cloud cover for the chosen date"><input type="checkbox" class="wx-switch" checked/> Real weather</label>
+        <div class="legend" id="hLegend" data-dock="dockLegend" style="margin-top:8px">
+          <span><i style="background:var(--purple)"></i>Glare, 3+ min</span>
+          <span><i style="background:#e63c3c"></i>Brief glare</span>
+          <span><i style="background:#d2911e"></i>Marginal</span>
+          <span><i style="background:#d7deeb;height:10px;width:12px"></i>Cloud</span>
+          <span id="hLegendWidth"><i style="background:#e63c3c;height:2px"></i><i style="background:#e63c3c;height:7px"></i>Busier road</span>
+          <span><b style="color:var(--text)">&#10148;</b> Facing the sun</span>
+        </div>
+        <div class="small muted" id="hInfo" style="min-height:6em;margin-top:6px">Loading highways...</div>
+      </div>
+
+      <!-- a year of glare, as a CSV (js/export.js) -->
+      <div class="card" id="hExportCard">
+        <h3 class="card-title">A year of glare. One file.</h3>
+        <p class="card-sub" style="margin-bottom:12px">Ranked. Mapped. Ready to plan with.</p>
+        <div class="row">
+          <select id="xArea" style="flex:1"></select>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <select id="xKind" style="flex:1">
+            <option value="all">Every stretch (ranked)</option>
+            <option value="hot">Hotspots only: the top 5% in California</option>
+          </select>
+          <button id="xGo" class="primary">Download CSV</button>
+        </div>
+        <div class="small muted" id="xInfo" style="margin-top:10px">Every ~1-mile stretch, both directions. <b>Ranked by glare VMT</b>:
+          miles driven into a low sun, weighted by how blinding. Traffic, hours by month and time of day, fatal crashes. All in.</div>
+        <details style="margin-top:6px"><summary class="small muted" style="cursor:pointer">How it works</summary>
+          <div class="small muted" style="margin-top:4px"><b>Glare VMT</b> = vehicles passing while the stretch is in glare &times; its length:
+            the unit agencies already count in, fair to short and long stretches, and it adds up by county or route. The ranking weights it
+            by severity (sun dead ahead in the middle of the glare band = 1). <b>Hotspot</b> = top 5% of all California stretches.
+            Ranks are statewide, also in a county file.<br>
+            Model: the Standard setting (sun within 12&deg; of straight ahead, 0&ndash;18&deg; up, the one checked against crash records),
+            not the sliders; hills included; <b>clear sky</b> (cloud only lowers these numbers); every day, every 5 minutes through the
+            morning and evening low-sun windows. Traffic: Caltrans counts &times; a typical hourly pattern. Crashes: NHTSA FARS fatal
+            crashes 2015&ndash;2024, glare as coded by the investigator, and those that happened while this model says the stretch was in
+            glare. Times are Pacific local time. The sun's yearly path repeats almost exactly, so 2027 serves any year.</div></details>
+      </div>
+
+      <div class="card" id="hTapCard">
+        <h3 class="card-title" style="margin-bottom:6px">Tap a highway.</h3>
+        <div class="small muted" id="rInfo">Tap any highway to see its glare right now.</div>
+        <div class="small muted" style="margin-top:6px"><b>Watch this drive</b> plays it in the Drive tab. The most blinding
+          stretches live in <button class="linkbtn" id="rToPlan">Drive</button>.</div>
+      </div>
+    </section>
+
+    <!-- ===================== DRIVE ===================== -->
+    <section class="pane" id="pane-drive">
+      <div class="banner neutral" id="banner">
+        <p class="state" id="dState">Ready</p>
+        <div class="sub" id="dSub">Mount your phone. Then go.</div>
+      </div>
+      <button id="startBtn" class="primary" style="padding:14px;font-size:17px">Start driving</button>
+      <button id="endDriveBtn">End drive</button>
+      <!-- the numbers and the road-test log fold behind "Details" so the banner and the map own the screen -->
+      <button id="driveMoreBtn" class="ghost">Details &#9656;</button>
+      <div id="driveMore">
+      <div class="grid">
+        <div class="tile"><div class="k">Sun elev</div><div class="v"><span id="tEl">--</span><span class="u">&deg;</span></div></div>
+        <div class="tile"><div class="k">Sun azim</div><div class="v"><span id="tAz">--</span><span class="u">&deg;</span></div></div>
+        <div class="tile"><div class="k">Heading</div><div class="v"><span id="tHdg">--</span><span class="u">&deg;</span></div></div>
+        <div class="tile"><div class="k">&Delta; to sun</div><div class="v"><span id="tD">--</span><span class="u">&deg;</span></div></div>
+        <div class="tile"><div class="k">Obstruction</div><div class="v" style="font-size:15px"><span id="tSun">--</span></div></div>
+        <div class="tile"><div class="k">Speed</div><div class="v"><span id="tSpd">--</span><span class="u">mph</span></div></div>
+      </div>
+      <div class="row">
+        <button id="logBtn" disabled style="flex:1">Start log</button>
+        <button id="dlBtn" disabled>CSV</button>
+        <button id="clrBtn" disabled>Clear</button>
+      </div>
+      <div class="small muted">Needs GPS, a compass and HTTPS. At a desk? Plan a route and tap <b>Watch this drive</b>.</div>
+      </div>
+    </section>
+
+    <div class="small muted" id="shadeState"></div>
+    <div class="status" id="status"></div>
+  </aside>
+  <div class="splitter" id="splitter" title="Drag to resize the panel" role="separator" aria-orientation="vertical"></div>
+
+  <main class="mapwrap">
+    <div id="map"></div>
+    <div class="maphint" id="mapHint">Use two fingers to move the map</div>
+    <!-- desktop overlays: filled by initDock (js/app.js) -->
+    <div class="mtools">
+      <button class="mbtn" id="layersBtn" aria-expanded="false">Layers</button>
+      <button class="mbtn" id="setBtn" aria-expanded="false" title="Glare sensitivity">Sensitivity</button>
+      <div class="mpop" id="layersPop" hidden><h3 class="card-title" style="margin-bottom:12px">Layers</h3><div id="dockLayers"></div></div>
+      <div class="mpop" id="setPop" hidden><h3 class="card-title" style="margin-bottom:12px">Glare sensitivity</h3><div id="dockSettings"></div></div>
+    </div>
+    <div id="dockView"></div>
+    <div id="dockLegend"></div>
+    <div class="hud" id="hud">
+      <div id="hudRoute" style="font-weight:700;font-size:13px;margin-bottom:2px"></div>
+      <div id="hudTimes" class="small muted" style="margin-bottom:6px;line-height:1.4"></div>
+      <div class="hs" id="hudState">--</div>
+      <div class="hrow"><span>time</span><b id="hudClock">--</b></div>
+      <div class="hrow"><span>sun elevation</span><b id="hudEl">--</b></div>
+      <div class="hrow"><span>sun vs heading</span><b id="hudD">--</b></div>
+      <div class="hrow"><span>cloud</span><b id="hudCloud">--</b></div>
+      <div class="hrow"><span>progress</span><b id="hudProg">--</b></div>
+      <input type="range" id="hudScrub" min="0" max="1000" value="0" aria-label="Move along the drive" style="width:100%;margin:6px 0 0"/>
+      <div class="small muted" style="font-size:11px">drag the slider, or the blue car on the map</div>
+      <div class="hrow"><span>glare so far</span><b id="hudRed">--</b></div>
+      <div class="hleg"><i style="background:#2fbf71"></i>clear <i style="background:#e0a030"></i>marginal <i style="background:#e63c3c"></i>glare</div>
+    </div>
+  </main>
+</div>
+
+
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js"></script>
+<script src="https://unpkg.com/leaflet-shadow-simulator@0.67.0/dist/leaflet-shadow-simulator.umd.min.js"></script>
+<script src="js/core.js?v=20261017m"></script>
+<script src="js/terrain.js?v=20261017m"></script>
+<script src="js/buildings.js?v=20261017m"></script>
+<script src="js/app.js?v=20261017m"></script>
+<script src="js/replay.js?v=20261017m"></script>
+<script src="js/plan.js?v=20261017m"></script>
+<script src="js/glaremap.js?v=20261017m"></script>
+<script src="js/export.js?v=20261017m"></script>
+<script src="js/drive.js?v=20261017m"></script>
+<script src="js/view.js?v=20261017m"></script>
+<script src="js/nav.js?v=20261017m"></script>
+<script>APP.init();</script>
+</body>
+</html>
