@@ -2,7 +2,7 @@
 
 Warns drivers before a low sun blinds them, and maps where it happens on every California state highway.
 
-**Try it:** https://rfguys-design.github.io/REPO-NAME/
+**Try it:** https://rfguys-design.github.io/solguard-app/
 
 - **Drive:** plan a route and see it coloured by glare at the time you leave. Find a shadier route or a better time to leave, or drive it with live glare warnings.
 - **Highway glare:** for Caltrans, counties and cities. Every state highway, scored in both directions, with a year of glare data to download as a CSV.
