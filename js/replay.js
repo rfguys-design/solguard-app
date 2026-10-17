@@ -178,7 +178,7 @@ const REPLAY={
     renderHud();
     const total=r.cumS[r.cumS.length-1];
     $("hudClock").textContent=this.clock.toLocaleTimeString([], {hour:"numeric",minute:"2-digit",second:"2-digit"});
-    $("hudProg").textContent=fmtMin(this.elapsed)+" of "+fmtMin(total);
+    $("hudProg").textContent=fmtMin(Math.max(0,this.elapsed))+" of "+fmtMin(total);   // the lead-in before the start counts as 0
     if(document.activeElement!==$("hudScrub")) $("hudScrub").value=Math.round(1000*this.elapsed/Math.max(1,total));
     $("hudRed").textContent=Math.round(this.redSec)+" s";
   },

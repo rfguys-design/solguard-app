@@ -362,6 +362,9 @@
   /* From / To sit on the page background, not in a card: give them the card colour so they read as fields */
   #planFrom input,#planTo input{background:var(--panel);box-shadow:var(--shadow);border:1px solid var(--line)}
   #planFrom input:focus,#planTo input:focus{border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+  /* Driver's view: the explanation changes every frame of a replay; a fixed 5-line box keeps the card one size */
+  #vWhy{height:calc(1.45em * 5);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden}
+  #vState{min-width:62px;text-align:center}
   /* place suggestions under From / To (suggestBox in js/plan.js) */
   .suggest{position:absolute;top:calc(100% + 4px);z-index:1200;background:var(--panel);border-radius:14px;
     box-shadow:0 12px 32px rgba(0,0,0,.16);padding:6px;max-height:300px;overflow:auto}
@@ -773,17 +776,17 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js"></script>
 <script src="https://unpkg.com/leaflet-shadow-simulator@0.67.0/dist/leaflet-shadow-simulator.umd.min.js"></script>
-<script src="js/core.js?v=20261017m"></script>
-<script src="js/terrain.js?v=20261017m"></script>
-<script src="js/buildings.js?v=20261017m"></script>
-<script src="js/app.js?v=20261017m"></script>
-<script src="js/replay.js?v=20261017m"></script>
-<script src="js/plan.js?v=20261017m"></script>
-<script src="js/glaremap.js?v=20261017m"></script>
-<script src="js/export.js?v=20261017m"></script>
-<script src="js/drive.js?v=20261017m"></script>
-<script src="js/view.js?v=20261017m"></script>
-<script src="js/nav.js?v=20261017m"></script>
+<script src="js/core.js?v=20261017n"></script>
+<script src="js/terrain.js?v=20261017n"></script>
+<script src="js/buildings.js?v=20261017n"></script>
+<script src="js/app.js?v=20261017n"></script>
+<script src="js/replay.js?v=20261017n"></script>
+<script src="js/plan.js?v=20261017n"></script>
+<script src="js/glaremap.js?v=20261017n"></script>
+<script src="js/export.js?v=20261017n"></script>
+<script src="js/drive.js?v=20261017n"></script>
+<script src="js/view.js?v=20261017n"></script>
+<script src="js/nav.js?v=20261017n"></script>
 <script>APP.init();</script>
 </body>
 </html>
