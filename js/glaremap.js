@@ -33,7 +33,7 @@ const HEATMAP={
       onShow:()=>{
         this.ensureCanvas(); this.canvas.style.display="block";
         const go=()=>{
-          if(!this.framed){ APP.map.setView([37.2,-119.5],6); this.framed=true; }
+          if(!this.framed){ APP.map.fitBounds(APP.SOCAL,APP.fitOpts()); this.framed=true; }
           this.loadSky(); this.draw();
         };
         if(this.roads) go(); else this.load().then(ok=>{ if(ok) go(); });

@@ -16,6 +16,7 @@ SunCalc.addTime(CONFIG.sunElevMin,"bandLowRise","bandLowSet");
 const APP={
   tab:null, when:null, map:null, shade:null, shadeOn:false, useWeather:true,
   tabs:{},                       // name -> {onShow,onHide,onWhen,onWeather}
+  SOCAL:[[32.55,-118.95],[34.35,-116.25]], // first view in both tabs: Los Angeles to San Diego
 
   init(){
     this.map=L.map("map",{zoomControl:true}).setView([32.80,-117.10],11);
@@ -76,6 +77,7 @@ const APP={
     initSplitter();
     initPhone();
     initDock();
+    this.map.invalidateSize(); this.map.fitBounds(this.SOCAL,{padding:[20,20],animate:false});
     initShade();
     // while driving, the Drive tab button stays put (End drive leaves); Highway glare ends the drive
     $("tab-plan").onclick=()=>{ if(this.tab!=="drive") this.show("plan"); };
