@@ -148,13 +148,14 @@
     body[data-tab=map] #hExportCard{order:9}
 
     body[data-tab=drive] #banner{order:3} body[data-tab=drive] #startBtn{order:4}
-    body[data-tab=drive] .mapwrap{order:5;height:30vh} body[data-tab=drive] #endDriveBtn{order:6}
+    body[data-tab=drive] .mapwrap{order:5;height:52vh} body[data-tab=drive] #endDriveBtn{order:6}
     body[data-tab=drive] #driveMoreBtn{order:7} body[data-tab=drive] #driveMore{order:8}
     body[data-tab=drive] #viewCard{order:9} body[data-tab=drive] #sensCard{order:10}
-    body[data-tab=drive] .banner{padding:26px 14px}
-    body[data-tab=drive] .banner .state{font-size:60px}
-    body[data-tab=drive] .banner .sub{font-size:17px}
-    body[data-tab=drive] #startBtn{padding:18px;font-size:18px}
+    /* one compact strip: the colour says it at a glance, so the directions and the map get the screen */
+    body[data-tab=drive] .banner{padding:9px 16px;display:flex;align-items:baseline;gap:10px;text-align:left;border-radius:16px}
+    body[data-tab=drive] .banner .state{font-size:28px;flex:none}
+    body[data-tab=drive] .banner .sub{font-size:15px;margin-top:0;min-width:0}
+    body[data-tab=drive] #startBtn{padding:14px;font-size:17px}
     .navarrow{font-size:46px;width:56px} .navdist{font-size:28px} .navtext{font-size:16px} .navglare{font-size:16px;padding:10px 12px}
 
     /* the replay panel over the map: a compact strip on a phone (the windshield below carries the rest) */
@@ -171,7 +172,7 @@
     body[data-tab=drive] .app{display:grid;grid-template-columns:1fr 1fr;column-gap:12px;row-gap:8px;align-content:start}
     body[data-tab=drive] .mapwrap{grid-column:2;grid-row:1 / span 30;height:calc(100dvh - 70px);position:sticky;top:8px}
     body[data-tab=drive] .app>*:not(.mapwrap), body[data-tab=drive] .side>*, body[data-tab=drive] .pane>*{grid-column:1}
-    body[data-tab=drive] .banner{padding:14px 10px} body[data-tab=drive] .banner .state{font-size:44px}
+    body[data-tab=drive] .banner{padding:8px 12px} body[data-tab=drive] .banner .state{font-size:26px}
   }
   .side,.card,.pane,.row>*{min-width:0}
   .pane{display:none;flex-direction:column;gap:10px}
@@ -409,6 +410,15 @@
     color:var(--text);border-radius:980px;padding:8px 14px;font-size:14px;min-height:0}
   .mbtn.on{background:var(--text);color:var(--bg)}
   body[data-tab=map] #setBtn, body[data-tab=drive] #layersBtn{display:none}
+  /* north up / heading up (js/drive.js): on the map in Drive, under Sensitivity on a desktop */
+  #orientBtn{position:absolute;right:10px;top:10px;z-index:1000;display:none;align-items:center;gap:6px}
+  .docked #orientBtn{top:56px}
+  body[data-tab=drive] #orientBtn{display:flex}
+  #orientBtn .oi{display:inline-block;width:16px;text-align:center;font-weight:700;font-size:13px}
+  .mapwrap.rot{overflow:hidden;border-radius:18px}
+  .mapwrap.rot #map{border-radius:0;box-shadow:none;transition:transform .5s linear}
+  .mapctl .leaflet-control-attribution{background:var(--hud);font-size:11px;padding:0 6px;margin:0}
+  .carmk svg{transition:transform .5s linear;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))}
   .mpop{position:absolute;top:46px;right:0;width:330px;max-height:calc(100vh - 150px);overflow:auto;background:var(--panel);
     border-radius:18px;box-shadow:0 12px 40px rgba(0,0,0,.18);padding:16px 18px}
   .mpop[hidden]{display:none}
@@ -752,6 +762,9 @@
       <div class="mpop" id="layersPop" hidden><h3 class="card-title" style="margin-bottom:12px">Layers</h3><div id="dockLayers"></div></div>
       <div class="mpop" id="setPop" hidden><h3 class="card-title" style="margin-bottom:12px">Glare sensitivity</h3><div id="dockSettings"></div></div>
     </div>
+    <button class="mbtn" id="orientBtn">North up</button>
+    <!-- heading up turns the map; the zoom buttons and credits wait here so they stay upright -->
+    <div class="mapctl"><div class="leaflet-top leaflet-left" id="ctlTL"></div><div class="leaflet-bottom leaflet-right" id="ctlBR"></div></div>
     <div id="dockView"></div>
     <div id="dockLegend"></div>
     <div class="hud" id="hud">
@@ -776,17 +789,17 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js"></script>
 <script src="https://unpkg.com/leaflet-shadow-simulator@0.67.0/dist/leaflet-shadow-simulator.umd.min.js"></script>
-<script src="js/core.js?v=20261017o"></script>
-<script src="js/terrain.js?v=20261017o"></script>
-<script src="js/buildings.js?v=20261017o"></script>
-<script src="js/app.js?v=20261017o"></script>
-<script src="js/replay.js?v=20261017o"></script>
-<script src="js/plan.js?v=20261017o"></script>
-<script src="js/glaremap.js?v=20261017o"></script>
-<script src="js/export.js?v=20261017o"></script>
-<script src="js/drive.js?v=20261017o"></script>
-<script src="js/view.js?v=20261017o"></script>
-<script src="js/nav.js?v=20261017o"></script>
+<script src="js/core.js?v=20261021b"></script>
+<script src="js/terrain.js?v=20261021b"></script>
+<script src="js/buildings.js?v=20261021b"></script>
+<script src="js/app.js?v=20261021b"></script>
+<script src="js/replay.js?v=20261021b"></script>
+<script src="js/plan.js?v=20261021b"></script>
+<script src="js/glaremap.js?v=20261021b"></script>
+<script src="js/export.js?v=20261021b"></script>
+<script src="js/drive.js?v=20261021b"></script>
+<script src="js/view.js?v=20261021b"></script>
+<script src="js/nav.js?v=20261021b"></script>
 <script>APP.init();</script>
 </body>
 </html>

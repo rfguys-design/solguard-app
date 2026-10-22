@@ -34,7 +34,7 @@ const NAV={
   async start(route,mode,opts){
     opts=opts||{};
     this.stop(true);
-    this.active=true; this.mode=mode; this.depart=opts.depart||new Date();
+    this.active=true; this.mode=mode; this.depart=opts.depart||new Date(); this.fixed=false;
     this.dest=opts.dest||route.coords[route.coords.length-1];
     this.muted=mode==="replay";
     $("navCard").style.display=""; this.renderMute();
@@ -116,7 +116,10 @@ const NAV={
   /* ---------- every position update ---------- */
   tick(lat,lng,speed,nowMs){
     if(!this.active||!this.route||this.rerouting) return;
+    // first fix of a live drive: the plan may start somewhere else (a typed From, an example), so start from the car
+    const first=!this.fixed; this.fixed=true; if(first) this._full=true;
     const m=this.snap(lat,lng);
+    if(first && this.mode==="live" && m.off>this.offRouteM){ this.reroute(lat,lng); return; }
     if(this.mode==="live" && m.off>this.offRouteM){
       if(!this.offSince) this.offSince=nowMs;
       if(nowMs-this.offSince>this.offRouteSec*1000){ this.reroute(lat,lng); return; }

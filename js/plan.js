@@ -66,9 +66,12 @@ const PLAN={
     $("shadierBtn").onclick=()=>this.findShadier();
     $("exToggle").onclick=()=>$("planExamples").classList.toggle("open");
     // no destination: live warnings wherever you drive (sensors must start inside the tap)
+    // a route up or a destination typed: drive there; neither: live warnings wherever you drive
     $("justDriveBtn").onclick=()=>{
+      if(this.routes.length && this.to){ this.driveRoute(); return; }
       if(!window.isSecureContext) status("Live GPS needs HTTPS: open the deployed https:// address on the phone.");
       APP.show("drive"); DRIVE.start();
+      if($("toIn").value.trim()) this.driveTo();
     };
     $("watchBtn").onclick=()=>this.watch();
     $("navBtn").onclick=()=>this.driveRoute();
@@ -397,6 +400,22 @@ const PLAN={
     APP.show("drive"); DRIVE.start();
     if(window.speechSynthesis){ try{ speechSynthesis.speak(new SpeechSynthesisUtterance("")); }catch(_){} }   // unlock speech inside the tap
     NAV.start(r,"live",{dest:this.to});
+  },
+
+  /* A destination but no planned route: the route starts from the car's first GPS fix (sensors are already on). */
+  async driveTo(){
+    if(window.speechSynthesis){ try{ speechSynthesis.speak(new SpeechSynthesisUtterance("")); }catch(_){} }
+    try{
+      const to=this.to||await geocode($("toIn").value.trim());
+      const t0=Date.now();
+      while(H.lat===null){
+        if(!DRIVE.started) return;
+        if(Date.now()-t0>30000) throw new Error("no GPS fix yet");
+        await new Promise(r=>setTimeout(r,500));
+      }
+      const routes=await fetchRoutes([H.lat,H.lng],to);
+      if(DRIVE.started && !NAV.active) NAV.start(routes[0],"live",{dest:to});
+    }catch(err){ status("Could not get directions: "+err.message+". Glare warnings still work."); }
   },
 
   /* Avoid-the-glare routing: route through detour waypoints set perpendicular
