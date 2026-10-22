@@ -280,9 +280,19 @@ function initShade(){
 function syncShade(){
   if(!APP.shade) return;
   const want = (APP.tab!=="map" || REPLAY.active) && APP.useShadows;
+  /* ShadeMap is not an ordinary Leaflet layer: addTo() wires it up itself and draws into its own canvas overlay, and
+     map.removeLayer(shade) did nothing, so the shading stayed on screen. Its overlay is taken off and put back by hand. */
+  const ov=()=>APP.shade._canvasOverlay;
   try{
-    if(want && !APP.shadeOn){ APP.shade.addTo(APP.map); APP.shadeOn=true; shadeSetDate(REPLAY.active?REPLAY.clock:(APP.tab==="drive"?new Date():APP.when)); }
-    if(!want && APP.shadeOn){ APP.map.removeLayer(APP.shade); APP.shadeOn=false; }
+    if(want && !APP.shadeOn){
+      if(ov() && !APP.map.hasLayer(ov())) ov().addTo(APP.map);
+      APP.shade.addTo(APP.map); APP.shadeOn=true;
+      shadeSetDate(REPLAY.active?REPLAY.clock:(APP.tab==="drive"?new Date():APP.when));
+    }
+    if(!want && APP.shadeOn){
+      APP.shade.onRemove(); if(ov()) APP.map.removeLayer(ov());
+      APP.shadeOn=false;
+    }
   }catch(_){}
   $("shadeState").textContent = APP.shadeOn ? "shadows shown: hills, and buildings when zoomed in to street level. Both are counted in the glare."
     : (!APP.useShadows && APP.tab!=="map" ? "shadows off: open sky assumed, hills and buildings ignored." : "");

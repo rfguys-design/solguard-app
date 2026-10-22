@@ -41,7 +41,7 @@ const PLAN={
       onShow:()=>{ this.group.addTo(APP.map); if(this.routes.length) this.recompute(); },
       onHide:()=>{ REPLAY.stop(); APP.map.removeLayer(this.group); },
       onWhen:()=>this.refresh(),
-      onWeather:()=>this.recompute()
+      onWeather:()=>{ this.recompute(); this.updateTip(); }     // the Best fix tip was scored with the old setting
     };
     APP.map.on("click",e=>{
       if(APP.tab!=="plan"||REPLAY.active) return;
