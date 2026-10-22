@@ -82,6 +82,39 @@ const PLAN={
       this.trips=j.trips||[];
       this.exampleCards();
     }).catch(()=>{});
+    if(new URLSearchParams(location.search).get("demo")==="rimrock") this.demoRimrock();
+  },
+
+  /* ?demo=rimrock -- the case study for the video: I-17 southbound through Rimrock, Arizona, Nov 27 2023. A fatal crash
+     there "just after 5 p.m." is one of those behind NHTSA's investigation of a camera-based driving system in reduced
+     visibility; police said the sun was in the driver's eyes. The drive is timed to reach Rimrock at 5:00 PM Arizona
+     time (UTC-7, no daylight saving). Weather off: past weather isn't in the forecast service, and the report
+     describes sun. Times show in the computer's time zone: set it to Arizona to record (docs/DEVLOG.md, Oct 21). */
+  async demoRimrock(){
+    const from=[34.7802,-111.6182], to=[34.5300,-111.9806], rim=[34.6468,-111.8039];
+    this.note("Loading the Rimrock, Arizona case...");
+    try{
+      // bearings pin both ends onto the southbound carriageway (about 225 deg here), so the router can't turn around
+      const j=await fetchJSON(CONFIG.osrmBase+"/route/v1/driving/"+from[1]+","+from[0]+";"+to[1]+","+to[0]+
+        "?overview=full&geometries=geojson&annotations=duration&steps=true&bearings=225,50;225,50");
+      if(j.code!=="Ok"||!j.routes||!j.routes.length) throw new Error("no route found");
+      REPLAY.stop();
+      this.routes=[osrmRoute(j.routes[0],"fastest")]; this.selected=0;
+      this.from=from; this.to=to;
+      $("fromIn").value="I-17 south, near Sedona"; $("toIn").value="Camp Verde, AZ"; this.checkReady();
+      this.setMarker("from",from); this.setMarker("to",to);
+      APP.useWeather=false; document.querySelectorAll(".wx-switch").forEach(x=>x.checked=false);
+      const r=this.routes[0]; let iR=0, bd=1e9;
+      r.coords.forEach((c,i)=>{ const d=haversine(c,rim); if(d<bd){ bd=d; iR=i; } });
+      const toRim=r.durs.slice(0,iR).reduce((a,b)=>a+b,0)*1000;
+      const dep=new Date(Date.UTC(2023,10,28,0,0)-toRim);              // 5:00 PM MST at Rimrock
+      APP.setWhen(dep,true); shadeSetDate(dep);
+      await TERRAIN.ensure(r.coords.filter((_,i)=>i%3===0));
+      await this.afterRoutes();
+      this.notePrefix="<b>Rimrock, Arizona · Nov 27, 2023.</b> I-17 southbound, reaching Rimrock at 5:00 PM Arizona time, "+
+        "when a fatal crash happened there with the sun in the driver's eyes. ";
+      this.recompute();
+    }catch(err){ this.note("Could not load the Rimrock case: "+err.message+"."); }
   },
 
   /* Three example cards: the two most blinding stretches (desert highways, the worst glare one driver

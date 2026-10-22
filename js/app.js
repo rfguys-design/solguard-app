@@ -55,7 +55,7 @@ const APP={
     const sheet=$("welcome");
     const closeSheet=()=>{ sheet.hidden=true; try{ localStorage.setItem("solguard.welcomed","1"); }catch(_){} };
     const openSheet=()=>{ sheet.hidden=false; $("demoBtn").focus(); };
-    if(!seen()) openSheet();
+    if(!seen() && !new URLSearchParams(location.search).get("demo")) openSheet();   // a demo link goes straight in
     $("welcomeX").onclick=closeSheet;
     sheet.addEventListener("click",e=>{ if(e.target===sheet) closeSheet(); });          // tap outside the card
     document.addEventListener("keydown",e=>{ if(e.key==="Escape" && !sheet.hidden) closeSheet(); });
