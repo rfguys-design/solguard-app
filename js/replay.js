@@ -175,7 +175,7 @@ const REPLAY={
     classify(this.clock.getTime());
     if(NAV.active && NAV.mode==="replay") NAV.tick(H.lat,H.lng,H.speed,this.clock.getTime());
     if(dt && H.risk==="high") this.redSec+=dt;
-    renderHud();
+    renderHud(); drawSun();
     const total=r.cumS[r.cumS.length-1];
     $("hudClock").textContent=this.clock.toLocaleTimeString([], {hour:"numeric",minute:"2-digit",second:"2-digit"});
     $("hudProg").textContent=fmtMin(Math.max(0,this.elapsed))+" of "+fmtMin(total);   // the lead-in before the start counts as 0

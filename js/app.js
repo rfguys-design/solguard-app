@@ -230,30 +230,51 @@ function updateSunLine(){
 /* A sun icon parked at the map edge in the sun's real compass direction, with
    its elevation, plus a faint ray from the centre so you can see how a road
    lines up with it. Hidden when the sun is below the horizon. */
-let _sunMk=null,_sunRay=null;
+let _sunMk=null,_sunRay=null,_sunLbl=null;
+/* The sun on the map.
+   Planning (and Highway glare): on the edge of the map, in the sun's compass direction from the centre, kept clear of
+   the Driver's view card and the map buttons on a desktop (the card used to hide an evening sun in the west).
+   A replay or a live drive: tied to the car, a fixed distance out along the sun's direction, so it travels with the
+   car and turns with a heading-up map. Called on every map move, replay frame and GPS fix. */
 function drawSun(){
   const map=APP.map; if(!map) return;
-  if(_sunMk){ map.removeLayer(_sunMk); _sunMk=null; }
-  if(_sunRay){ map.removeLayer(_sunRay); _sunRay=null; }
-  if(APP.tab==="drive"||REPLAY.active) return;
-  const c=map.getCenter(), sp=sunPosition(APP.when,c.lat,c.lng);
-  if(sp.el<=0) return;
-  const sz=map.getSize(), ctr=map.latLngToContainerPoint(c);
-  const th=sp.az*Math.PI/180, dx=Math.sin(th), dy=-Math.cos(th);   // north = up
-  const m=36;
-  const tx=dx>0?(sz.x-m-ctr.x)/dx:(dx<0?(m-ctr.x)/dx:1e9);
-  const ty=dy>0?(sz.y-m-ctr.y)/dy:(dy<0?(m-ctr.y)/dy:1e9);
-  const t=Math.max(20,Math.min(tx,ty));
+  const hide=()=>{ if(_sunMk){ map.removeLayer(_sunMk); _sunMk=null; } if(_sunRay){ map.removeLayer(_sunRay); _sunRay=null; } _sunLbl=null; };
+  const follow=REPLAY.active || (APP.tab==="drive" && DRIVE.started);
+  let anchor, sp;
+  if(follow){
+    if(H.lat===null||H.sunAz===null||H.sunEl===null) return hide();
+    anchor=L.latLng(H.lat,H.lng); sp={az:H.sunAz,el:H.sunEl};
+  } else if(APP.tab==="drive") return hide();
+  else { anchor=map.getCenter(); sp=sunPosition(APP.when,anchor.lat,anchor.lng); }
+  if(sp.el<=0) return hide();
+  const ctr=map.latLngToContainerPoint(anchor), th=sp.az*Math.PI/180, dx=Math.sin(th), dy=-Math.cos(th);   // north = up
+  let t;
+  if(follow){
+    const box=document.querySelector(".mapwrap");                 // the visible frame (a heading-up map is bigger)
+    t=Math.max(60,Math.min(170,0.36*Math.min(box.clientWidth,box.clientHeight)));
+  } else {
+    const sz=map.getSize(), m=36, docked=document.body.classList.contains("docked");
+    const card=docked && VIEW.open && $("viewCard").style.display!=="none" && $("dockView").offsetWidth;
+    const x0=card?$("dockView").offsetWidth+30:m, y0=docked?64:m;  // the left column holds the card; the top, the buttons
+    const tx=dx>0?(sz.x-m-ctr.x)/dx:(dx<0?(x0-ctr.x)/dx:1e9);
+    const ty=dy>0?(sz.y-m-ctr.y)/dy:(dy<0?(y0-ctr.y)/dy:1e9);
+    t=Math.max(20,Math.min(tx,ty));
+  }
   const edge=map.containerPointToLatLng(L.point(ctr.x+dx*t,ctr.y+dy*t));
-  const rayEnd=map.containerPointToLatLng(L.point(ctr.x+dx*(t-20),ctr.y+dy*(t-20)));
-  _sunRay=L.polyline([c,rayEnd],{color:"#f5a623",weight:2,opacity:.45,dashArray:"3 6",interactive:false}).addTo(map);
+  const rayEnd=map.containerPointToLatLng(L.point(ctr.x+dx*(t-16),ctr.y+dy*(t-16)));
+  if(_sunRay) _sunRay.setLatLngs([anchor,rayEnd]);
+  else _sunRay=L.polyline([anchor,rayEnd],{color:"#f5a623",weight:follow?3:2,opacity:follow?.75:.45,dashArray:"3 6",interactive:false}).addTo(map);
+  const lbl=sp.el.toFixed(0)+(follow?"&deg; sun":"&deg;");
+  if(_sunMk && _sunLbl===lbl){ _sunMk.setLatLng(edge); return; }
   const html='<div style="display:flex;flex-direction:column;align-items:center">'
     +'<div style="width:24px;height:24px;border-radius:50%;background:radial-gradient(circle,#ffe08a,#f5a623);'
     +'box-shadow:0 0 9px 3px rgba(245,166,35,.6);border:2px solid #fff"></div>'
-    +'<div style="font:600 11px system-ui;color:#f5a623;background:rgba(0,0,0,.55);padding:0 4px;border-radius:4px;margin-top:2px">'
-    +sp.el.toFixed(0)+'&deg;</div></div>';
+    +'<div style="font:600 11px system-ui;color:#f5a623;background:rgba(0,0,0,.55);padding:0 4px;border-radius:4px;margin-top:2px;white-space:nowrap">'
+    +lbl+'</div></div>';
+  if(_sunMk) map.removeLayer(_sunMk);
   _sunMk=L.marker(edge,{icon:L.divIcon({className:"",html,iconSize:[24,40],iconAnchor:[12,12]}),
-    interactive:false,keyboard:false}).addTo(map);
+    interactive:false,keyboard:false,zIndexOffset:900}).addTo(map);
+  _sunLbl=lbl;
 }
 
 /* ===================  SHADOW LAYER (ShadeMap)  =================== */

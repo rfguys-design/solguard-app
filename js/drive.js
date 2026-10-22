@@ -80,7 +80,7 @@ const DRIVE={
     $("startBtn").style.display="";
     resetHold(); H.risk="none"; renderHud();
     this.applyOrient(false);
-    APP.show(to||"plan");
+    APP.show(to||"plan"); drawSun();
   },
 
   onGeo(pos){
@@ -104,6 +104,7 @@ const DRIVE={
     this.turn();
     if(!APP.shadeOn){ H.inSunKnown=false; bldCheck(); classify(Date.now()); renderHud(); this.logSample(); }   // no terrain layer -> decide now
     if(NAV.active && NAV.mode==="live") NAV.tick(H.lat,H.lng,H.speed,Date.now());   // directions + glare alerts
+    drawSun();
     status(this.footer());
   },
   chooseHeading(){
@@ -189,6 +190,7 @@ const DRIVE={
   /* the arrow always points along the heading on the map; heading up also turns the map the other way */
   turn(){
     this.turnAt=Date.now();
+    drawSun();
     const h=H.headingUsed;
     if(this.marker && this.marker.getElement()){
       const svg=this.marker.getElement().firstChild;
