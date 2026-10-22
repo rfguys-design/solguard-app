@@ -146,6 +146,7 @@ const BLD={
      nearest blocker {h, d, est, kind}, null if clear, or undefined if the
      buildings here aren't loaded (unknown). */
   blocks(lat,lng,az,el){
+    if(!APP.useShadows) return null;                    // Shadows switch off: open sky
     if(el<=0) return null;
     if(!this.covered(lat,lng)) return undefined;
     const tanE=Math.tan(el*Math.PI/180);

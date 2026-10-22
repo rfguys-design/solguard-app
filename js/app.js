@@ -14,7 +14,7 @@ SunCalc.addTime(CONFIG.sunElevMax,"bandTopRise","bandTopSet");
 SunCalc.addTime(CONFIG.sunElevMin,"bandLowRise","bandLowSet");
 
 const APP={
-  tab:null, when:null, map:null, shade:null, shadeOn:false, useWeather:true,
+  tab:null, when:null, map:null, shade:null, shadeOn:false, useWeather:true, useShadows:true,
   tabs:{},                       // name -> {onShow,onHide,onWhen,onWeather}
   SOCAL:[[32.55,-118.95],[34.35,-116.25]], // first view in both tabs: Los Angeles to San Diego
 
@@ -46,6 +46,15 @@ const APP={
     const wx=[...document.querySelectorAll(".wx-switch")];
     wx.forEach(x=>x.onchange=()=>{
       this.useWeather=x.checked; wx.forEach(y=>y.checked=x.checked);
+      const t=this.tabs[this.tab]; if(t&&t.onWeather) t.onWeather();
+      VIEW.render();
+    });
+    // Shadows: hills and buildings can hide the sun (js/terrain.js, js/buildings.js). Off = open sky everywhere,
+    // which shows what the shadow data adds. Same pattern as Real weather.
+    const sh=[...document.querySelectorAll(".sh-switch")];
+    sh.forEach(x=>x.onchange=()=>{
+      this.useShadows=x.checked; sh.forEach(y=>y.checked=x.checked);
+      syncShade();
       const t=this.tabs[this.tab]; if(t&&t.onWeather) t.onWeather();
       VIEW.render();
     });
@@ -270,12 +279,13 @@ function initShade(){
 }
 function syncShade(){
   if(!APP.shade) return;
-  const want = APP.tab!=="map" || REPLAY.active;
+  const want = (APP.tab!=="map" || REPLAY.active) && APP.useShadows;
   try{
     if(want && !APP.shadeOn){ APP.shade.addTo(APP.map); APP.shadeOn=true; shadeSetDate(REPLAY.active?REPLAY.clock:(APP.tab==="drive"?new Date():APP.when)); }
     if(!want && APP.shadeOn){ APP.map.removeLayer(APP.shade); APP.shadeOn=false; }
   }catch(_){}
-  $("shadeState").textContent = APP.shadeOn ? "shadows shown: hills, and buildings when zoomed in to street level. Both are counted in the glare." : "";
+  $("shadeState").textContent = APP.shadeOn ? "shadows shown: hills, and buildings when zoomed in to street level. Both are counted in the glare."
+    : (!APP.useShadows && APP.tab!=="map" ? "shadows off: open sky assumed, hills and buildings ignored." : "");
 }
 let _shadeT=null;
 function shadeSetDate(d){

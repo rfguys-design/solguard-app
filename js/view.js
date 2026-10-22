@@ -283,7 +283,7 @@ ${handles}
     // (preview mode looks at the map centre: fetch its elevation once, then redraw)
     if(lat!=null && !TERRAIN.ready(lat,lng)){ const k=lat.toFixed(2)+","+lng.toFixed(2);
       if(this._tReq!==k){ this._tReq=k; TERRAIN.ensure([[lat,lng]]).then(()=>this.render()); } }
-    const hv=(lat==null||hdg==null||!TERRAIN.ready(lat,lng))?null:this.skyOffs.map(o=>{ const h=TERRAIN.horizon(lat,lng,(hdg+o+360)%360); return h?h.ang:0; });
+    const hv=(lat==null||hdg==null||!APP.useShadows||!TERRAIN.ready(lat,lng))?null:this.skyOffs.map(o=>{ const h=TERRAIN.horizon(lat,lng,(hdg+o+360)%360); return h?h.ang:0; });
     if(!hv||hv.every(e=>e<=0.05)) this.e.hill.setAttribute("d","");
     else{
       const base=this.HY+2;
@@ -291,7 +291,7 @@ ${handles}
       this.skyOffs.forEach((o,i)=>{ d+=` L${this.px(o).toFixed(1)} ${(hv[i]>0?this.py(Math.min(hv[i],40)):base).toFixed(1)}`; });
       this.e.hill.setAttribute("d",d+` L${this.px(this.skyOffs[this.skyOffs.length-1]).toFixed(1)} ${base} Z`);
     }
-    const v=(lat==null||hdg==null)?null:BLD.skyline(lat,lng,hdg,this.skyOffs);
+    const v=(lat==null||hdg==null||!APP.useShadows)?null:BLD.skyline(lat,lng,hdg,this.skyOffs);
     if(!v||v.every(e=>e<=0)){ this.e.bld.setAttribute("d",""); return; }
     const base=this.HY+2;
     let d=`M${this.px(this.skyOffs[0]).toFixed(1)} ${base}`;

@@ -108,7 +108,7 @@ const TERRAIN={
   },
   /* Is the sun at (az, el) behind the terrain from here? {kind:"hill", ang, d} or null/undefined */
   blocks(lat,lng,az,el){
-    if(el<=0) return null;
+    if(el<=0 || !APP.useShadows) return null;              // Shadows switch off: open sky
     if(!this.ready(lat,lng)) return undefined;
     const h=this.horizon(lat,lng,az);
     return h && el<h.ang ? {kind:"hill", ang:h.ang, d:h.d} : null;

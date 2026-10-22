@@ -38,8 +38,8 @@ const PLAN={
   init(){
     this.group=L.layerGroup();
     APP.tabs.plan={
-      onShow:()=>{ this.group.addTo(APP.map); if(this.caseMk) this.caseMk.addTo(APP.map); if(this.routes.length) this.recompute(); },
-      onHide:()=>{ REPLAY.stop(); APP.map.removeLayer(this.group); if(this.caseMk) APP.map.removeLayer(this.caseMk); },
+      onShow:()=>{ this.group.addTo(APP.map); if(this.routes.length) this.recompute(); },
+      onHide:()=>{ REPLAY.stop(); APP.map.removeLayer(this.group); },
       onWhen:()=>this.refresh(),
       onWeather:()=>this.recompute()
     };
@@ -88,12 +88,13 @@ const PLAN={
   /* ?demo=rimrock -- the case study for the video: I-17 southbound through Rimrock, Arizona, Nov 27 2023. A fatal crash
      there "just after 5 p.m." is one of those behind NHTSA's investigation of a camera-based driving system in reduced
      visibility; police said the sun was in the driver's eyes. The drive is timed to reach Rimrock at 5:00 PM Arizona
-     time (UTC-7, no daylight saving). The crash itself is in NHTSA's fatal-crash records (FARS 2023, case 40829):
-     5:04 PM, 34.63739 N 111.82236 W, on the southbound carriageway, the driver's vision coded "reflected glare, bright
-     sunlight". It is marked on the map, and the drive is timed to reach it at 5:04. Weather off: past weather isn't in the forecast service, and the report
+     time (UTC-7, no daylight saving). The crash is in NHTSA's fatal-crash records (FARS 2023, case 40829: 5:04 PM, on the
+     southbound carriageway, vision coded "reflected glare, bright sunlight"). It is not marked: at that exact point the
+     elevation data shows the road climbing ~15 m ahead, which the app reads as a crest hiding the 1.7 deg sun, and that
+     data can't say whether the crest is real (docs/DEVLOG.md, Oct 21). Weather off: past weather isn't in the forecast service, and the report
      describes sun. Times show in the computer's time zone: set it to Arizona to record (docs/DEVLOG.md, Oct 21). */
   async demoRimrock(){
-    const from=[34.7802,-111.6182], to=[34.5300,-111.9806], crash=[34.63739,-111.82236];
+    const from=[34.7802,-111.6182], to=[34.5300,-111.9806], rim=[34.6468,-111.8039];
     this.note("Loading the Rimrock, Arizona case...");
     try{
       // bearings pin both ends onto the southbound carriageway (about 225 deg here), so the router can't turn around
@@ -107,20 +108,14 @@ const PLAN={
       this.setMarker("from",from); this.setMarker("to",to);
       APP.useWeather=false; document.querySelectorAll(".wx-switch").forEach(x=>x.checked=false);
       const r=this.routes[0]; let iR=0, bd=1e9;
-      r.coords.forEach((c,i)=>{ const d=haversine(c,crash); if(d<bd){ bd=d; iR=i; } });
-      const toCrash=r.durs.slice(0,iR).reduce((a,b)=>a+b,0)*1000;
-      const dep=new Date(Date.UTC(2023,10,28,0,4)-toCrash);            // 5:04 PM MST at the crash site
-      if(this.caseMk) APP.map.removeLayer(this.caseMk);
-      this.caseMk=L.circleMarker(crash,{radius:9,color:"#fff",weight:3,fillColor:"#111",fillOpacity:1}).addTo(APP.map)
-        .bindTooltip("Fatal crash · 5:04 PM",{permanent:true,direction:"right",offset:[10,0]})
-        .bindPopup("<b>Fatal crash, Nov 27, 2023, 5:04 PM</b><br>I-17 southbound near Rimrock, AZ. A pedestrian helping at an earlier "+
-          "crash was killed. The investigator coded the driver's vision as obscured by <i>reflected glare, bright sunlight</i>.<br>"+
-          "<span class='small muted'>NHTSA FARS 2023, case 40829</span>");
+      r.coords.forEach((c,i)=>{ const d=haversine(c,rim); if(d<bd){ bd=d; iR=i; } });
+      const toRim=r.durs.slice(0,iR).reduce((a,b)=>a+b,0)*1000;
+      const dep=new Date(Date.UTC(2023,10,28,0,0)-toRim);              // 5:00 PM MST at Rimrock
       APP.setWhen(dep,true); shadeSetDate(dep);
       await TERRAIN.ensure(r.coords.filter((_,i)=>i%3===0));
       await this.afterRoutes();
-      this.notePrefix="<b>Rimrock, Arizona · Nov 27, 2023.</b> I-17 southbound, reaching the marked crash site at 5:04 PM "+
-        "Arizona time, the minute of a fatal crash there with the sun in the driver's eyes. ";
+      this.notePrefix="<b>Rimrock, Arizona · Nov 27, 2023.</b> I-17 southbound, reaching Rimrock around 5 PM Arizona time, "+
+        "when a fatal crash happened there with the sun in the driver's eyes. ";
       this.recompute();
     }catch(err){ this.note("Could not load the Rimrock case: "+err.message+"."); }
   },
@@ -160,9 +155,8 @@ const PLAN={
   /* Example trips use routes saved in data/demo_routes.json, so they work even
      if the free routing server is down. The time is set to when the sun is
      actually low for that direction on the chosen date. */
-  clearCase(){ if(this.caseMk){ APP.map.removeLayer(this.caseMk); this.caseMk=null; } },
   async loadExample(t){
-    REPLAY.stop(); this.clearCase();
+    REPLAY.stop();
     this.from=t.from; this.to=t.to;
     $("fromIn").value=t.name.split(" → ")[0]; $("toIn").value=t.name.split(" → ")[1].replace(/ \(.*\)/,"");
     this.checkReady();
@@ -241,7 +235,7 @@ const PLAN={
   },
 
   async doPlan(){
-    REPLAY.stop(); this.notePrefix=""; this.clearCase();
+    REPLAY.stop(); this.notePrefix="";
     try{
       this.note("Finding route...");
       const fromTxt=$("fromIn").value.trim(), toTxt=$("toIn").value.trim();
