@@ -243,7 +243,8 @@ function drawSun(){
   let anchor, sp;
   if(follow){
     if(H.lat===null||H.sunAz===null||H.sunEl===null) return hide();
-    anchor=L.latLng(H.lat,H.lng); sp={az:H.sunAz,el:H.sunEl};
+    // live drive: tied to the car marker as drawn (it glides between GPS fixes), not to the newest fix
+    anchor=(!REPLAY.active && DRIVE.marker)?DRIVE.marker.getLatLng():L.latLng(H.lat,H.lng); sp={az:H.sunAz,el:H.sunEl};
   } else if(APP.tab==="drive") return hide();
   else { anchor=map.getCenter(); sp=sunPosition(APP.when,anchor.lat,anchor.lng); }
   if(sp.el<=0) return hide();

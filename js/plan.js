@@ -363,7 +363,8 @@ const PLAN={
         "sun off your heading: <b>"+Math.round(p.dAng)+"&deg;</b><br>"+
         "cloud: <b>"+(p.cloud===null?"unknown":p.cloud+"%")+"</b><br>"+
         "lasts: <b>"+Math.round(p.runSec)+" s</b></div>";
-      L.marker(p.ll,{icon:L.divIcon({className:"",html:'<div class="hot">!</div>',iconSize:[22,22]})})
+      // above the start pin: a glare zone that begins at the start would otherwise hide under it
+      L.marker(p.ll,{icon:L.divIcon({className:"",html:'<div class="hot">!</div>',iconSize:[22,22]}),zIndexOffset:1000})
         .addTo(this.group).bindTooltip("Glare ~"+t+" · "+Math.round(p.runSec)+" s",{direction:"top"})
         .bindPopup(popup);
     });
@@ -432,11 +433,17 @@ const PLAN={
   watch(){
     if(!this.routes.length) return;
     const r=this.routes[this.selected];
+    /* On a phone the windshield unfolds for the replay -- unless the driver chose Hide (then it stays hidden) -- and
+       folds again when the replay ends. It used to open even after Hide, and stay open into the next drive. */
+    let chose=null; try{ chose=localStorage.getItem("solguard.viewOpen"); }catch(_){}
+    const unfold=isPhone() && !VIEW.open && chose!=="0";
     REPLAY.start(routeFromOsrm("planned trip",r),this.candDate(r),{line:false,onEnd:()=>{
+      let now=null; try{ now=localStorage.getItem("solguard.viewOpen"); }catch(_){}
+      if(unfold && VIEW.open && now!=="1"){ VIEW.open=false; VIEW.layout(); }   // unless they tapped Show meanwhile
       if(APP.tab==="plan") APP.map.fitBounds(L.latLngBounds(r.coords),APP.fitOpts()); }});
     NAV.start(r,"replay",{depart:this.candDate(r),dest:this.to});   // the directions card rides along, silently
     if(isPhone()){
-      if(!VIEW.open){ VIEW.open=true; VIEW.layout(); VIEW.render(); }     // the windshield for the replay (not saved)
+      if(unfold){ VIEW.open=true; VIEW.layout(); VIEW.render(); }        // the windshield for the replay (not saved)
       setTimeout(()=>{ APP.map.invalidateSize(); $("navCard").scrollIntoView({block:"start",behavior:"smooth"}); },50);
     }
   },

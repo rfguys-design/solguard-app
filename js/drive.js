@@ -12,6 +12,10 @@ const DRIVE={
   gpsHeadingMinSpeed:1.5,        // m/s; above this, trust GPS course over the compass
   mapZoom:17,                    // first zoom (buildings resolve for the shadow layer); after that the driver's own
   headingUp:false, rot:0,        // map turned so the road ahead points up (like Google Maps), or north up
+  gpsHoldMs:15000,               // stopped at a light: keep the last GPS course this long before trusting the compass
+  hdgDeadband:4,                 // deg; smaller heading changes don't turn the map (compass and GPS noise)
+  glideMs:900,                   // the map and the car glide between GPS fixes (about one a second) instead of jumping
+  dispHdg:null,                  // the heading the map and the arrow show: H.headingUsed without the wobble
 
   init(){
     APP.tabs.drive={
@@ -74,6 +78,7 @@ const DRIVE={
     if(this.watchId!==null && "geolocation" in navigator) navigator.geolocation.clearWatch(this.watchId);
     this.watchId=null; (this.timers||[]).forEach(clearInterval); this.timers=[];
     try{ if(this.wake) this.wake.release(); }catch(_){} this.wake=null;
+    cancelAnimationFrame(this.glideRaf); this.glideTo=null; this.dispHdg=null; this.gpsAt=0;
     if(this.marker){ APP.map.removeLayer(this.marker); this.marker=null; }
     if(NAV.active && NAV.mode==="live") NAV.stop();
     this.started=false; this.logging=false; $("logBtn").classList.remove("on"); $("logBtn").disabled=true; this.updateLogBtn();
@@ -96,8 +101,8 @@ const DRIVE={
     TERRAIN.ensure([[H.lat,H.lng]]);                // and the hills
     if(APP.tab!=="drive") return;                   // only the Drive tab follows the car
     this.applyOrient();
-    this.follow();
-    if(this.marker) this.marker.setLatLng([H.lat,H.lng]);
+    this.follow(true);
+    if(this.marker) this.glide([H.lat,H.lng]);
     else this.marker=L.marker([H.lat,H.lng],{interactive:false,keyboard:false,zIndexOffset:1000,icon:L.divIcon({className:"carmk",
       iconSize:[34,34],iconAnchor:[17,17],
       html:'<svg viewBox="0 0 34 34" width="34" height="34"><path d="M17 4 L27 28 L17 22.5 L7 28 Z" fill="#3b82f6" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/></svg>'})}).addTo(APP.map);
@@ -107,8 +112,13 @@ const DRIVE={
     drawSun();
     status(this.footer());
   },
+  /* Moving: the GPS course. Slowing or stopped: KEEP that course for gpsHoldMs before falling back to the compass. A
+     phone compass inside a car is often tens of degrees off (the car's steel, the mount), so switching to it the moment
+     the speed dropped under 1.5 m/s swung the heading -- and a heading-up map -- back and forth in slow traffic. */
   chooseHeading(){
-    if(H.gpsHeading!==null && H.speed!==null && H.speed>=this.gpsHeadingMinSpeed){ H.headingUsed=H.gpsHeading; H.headingSrc="gps"; }
+    const now=Date.now();
+    if(H.gpsHeading!==null && H.speed!==null && H.speed>=this.gpsHeadingMinSpeed){ H.headingUsed=H.gpsHeading; H.headingSrc="gps"; this.gpsAt=now; }
+    else if(this.gpsAt && now-this.gpsAt<this.gpsHoldMs && H.headingSrc==="gps"){ /* hold the last moving course */ }
     else if(H.compassHeading!==null){ H.headingUsed=H.compassHeading; H.headingSrc="compass"; }
     else if(H.gpsHeading!==null){ H.headingUsed=H.gpsHeading; H.headingSrc="gps"; }
   },
@@ -122,15 +132,37 @@ const DRIVE={
   /* ---------- the map follows the car ----------
      The first fix zooms in to mapZoom; after that the driver's own zoom (+/-, pinch) is kept. Heading up puts the
      car low on the screen, so more of the road ahead shows. */
-  follow(){
+  /* smooth (each GPS fix): glide there in glideMs, in step with the car marker, instead of a jump every second -- the
+     jumps were the map's jitter. A big move (a zoom change, the first fix, a GPS leap) still jumps. */
+  follow(smooth){
     if(H.lat===null) return;
     const m=APP.map, z=this.centered?m.getZoom():this.mapZoom; this.centered=true;
     let c=L.latLng(H.lat,H.lng);
-    if(this.rotOn && H.headingUsed!==null){
-      const ahead=0.22*document.querySelector(".mapwrap").clientHeight, th=H.headingUsed*Math.PI/180;
+    const hd=this.dispHdg!==null?this.dispHdg:H.headingUsed;
+    if(this.rotOn && hd!==null){
+      const ahead=0.22*document.querySelector(".mapwrap").clientHeight, th=hd*Math.PI/180;
       c=m.unproject(m.project(c,z).add([Math.sin(th)*ahead,-Math.cos(th)*ahead]),z);
     }
-    m.setView(c,z,{animate:false});
+    const off=z===m.getZoom()?m.project(c,z).distanceTo(m.project(m.getCenter(),z)):Infinity;
+    if(off<1) return;                                                // already there
+    if(smooth && off<400) m.panTo(c,{animate:true,duration:this.glideMs/1000,easeLinearity:1,noMoveStart:true});
+    else m.setView(c,z,{animate:false});
+  },
+  /* move the car marker to `to` over glideMs (linear, like the map's pan), so it stays still on screen */
+  glide(to){
+    const mk=this.marker, t0=performance.now();
+    cancelAnimationFrame(this.glideRaf);
+    // frames stalled (a throttled or backgrounded page): finish the last glide first, so the car never falls behind
+    if(this.glideTo && t0-this.glideAt>this.glideMs*1.5) mk.setLatLng(this.glideTo);
+    this.glideTo=to; this.glideAt=t0;
+    const from=mk.getLatLng();
+    if(from.distanceTo(to)>300 || document.hidden){ mk.setLatLng(to); drawSun(); return; }
+    const step=now=>{
+      const k=Math.min(1,(now-t0)/this.glideMs);
+      mk.setLatLng([from.lat+(to[0]-from.lat)*k, from.lng+(to[1]-from.lng)*k]); drawSun();
+      if(k<1) this.glideRaf=requestAnimationFrame(step);
+    };
+    this.glideRaf=requestAnimationFrame(step);
   },
 
   /* ---------- north up / heading up ----------
@@ -191,7 +223,7 @@ const DRIVE={
   turn(){
     this.turnAt=Date.now();
     drawSun();
-    const h=H.headingUsed;
+    const h=this.smoothHeading();
     if(this.marker && this.marker.getElement()){
       const svg=this.marker.getElement().firstChild;
       if(svg){ svg.style.transform="rotate("+(h===null?0:h)+"deg)"; svg.style.opacity=h===null?.55:1; }
@@ -200,6 +232,16 @@ const DRIVE={
       this.rot+=((-h-this.rot)%360+540)%360-180;                   // the short way round: 350 to 10 turns 20, not 340
       $("map").style.transform="rotate("+this.rot+"deg)";
     }
+  },
+  /* The heading on screen: changes under hdgDeadband are ignored (the compass alone twitches a few degrees many times a
+     second), anything bigger is taken whole; the CSS transition (.5 s) turns the map and the arrow smoothly to it. */
+  smoothHeading(){
+    const h=H.headingUsed;
+    if(h===null){ this.dispHdg=null; return null; }
+    if(this.dispHdg===null) return this.dispHdg=h;
+    const d=((h-this.dispHdg)%360+540)%360-180;
+    if(Math.abs(d)>=this.hdgDeadband) this.dispHdg=h;
+    return this.dispHdg;
   },
   async recomputeInSun(){
     if(APP.tab!=="drive"||REPLAY.active||!APP.shadeOn||H.lat===null) return;
