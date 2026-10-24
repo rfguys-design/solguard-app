@@ -78,7 +78,7 @@ const PLAN={
     $("timingUse").onclick=()=>{ if(this.tipWhen) APP.setWhen(this.tipWhen); };   // refresh() then hides the tip
     $("detourMin").onchange=e=>{ const v=parseInt(e.target.value); if(!isNaN(v)&&v>=0) this.maxDetourMin=v; };
 
-    fetch("data/demo_routes.json").then(r=>r.ok?r.json():{trips:[]}).then(j=>{
+    fetch("data/demo_routes.json",{cache:"no-cache"}).then(r=>r.ok?r.json():{trips:[]}).then(j=>{
       this.trips=j.trips||[];
       this.exampleCards();
     }).catch(()=>{});
@@ -154,7 +154,12 @@ const PLAN={
 
   /* Example trips use routes saved in data/demo_routes.json, so they work even
      if the free routing server is down. The time is set to when the sun is
-     actually low for that direction on the chosen date. */
+     actually low for that direction on the chosen date. A trip with a fixed
+     "date" (a clear evening in the past) always opens on that date: its cloud
+     cover comes from the weather archive, so every visitor sees the same red
+     route and the same numbers. Using today's date, the example changed with
+     the forecast: picked under an assumed clear sky, then the clouds arrived
+     and 6.9 mi of glare became 1.2. */
   async loadExample(t){
     REPLAY.stop();
     this.from=t.from; this.to=t.to;
@@ -163,14 +168,23 @@ const PLAN={
     this.setMarker("from",this.from); this.setMarker("to",this.to);
     this.routes=t.routes.map(r=>Object.assign({},r)); this.selected=0; this.notePrefix="";
     this.note("Finding the departure with the most glare for your settings...");
-    await TERRAIN.ensure(this.routes[0].coords.filter((_,i)=>i%6===0));   // hills decide the lowest sun
-    const pick=SENS.with(CONFIG.demoLimit,()=>this.worstDeparture(t));   // the tight limit, not the driver's setting
+    const fixed=t.date?t.date.split("-").map(Number):null;
+    const base=fixed?new Date(fixed[0],fixed[1]-1,fixed[2],12):APP.when;
+    // hills decide the lowest sun; the sky for that day too, so the departure is picked with the real clouds
+    const pts=[]; this.routes.forEach(r=>r.coords.forEach((c,i)=>{ if(i%15===0) pts.push(c); }));
+    const day0=new Date(base.getFullYear(),base.getMonth(),base.getDate()).getTime();
+    await Promise.all([TERRAIN.ensure(this.routes[0].coords.filter((_,i)=>i%6===0)),
+                       wxEnsure(pts,day0,day0+86400000)]);
+    const pick=SENS.with(CONFIG.demoLimit,()=>this.worstDeparture(t,base));   // the tight limit, not the driver's setting
     APP.setWhen(pick.dep,true); shadeSetDate(pick.dep);
     await this.afterRoutes();
     const day=d=>d.toLocaleDateString([], {weekday:"short",month:"short",day:"numeric"});
-    this.notePrefix=((pick.today?"Departure set to <b>"+clockText(pick.dep)+"</b>, the worst glare that day. "
+    const dayY=d=>d.toLocaleDateString([], {weekday:"short",month:"short",day:"numeric",year:"numeric"});
+    this.notePrefix=(fixed&&pick.today?"Example: <b>"+dayY(pick.dep)+"</b>, a clear evening, leaving at <b>"+clockText(pick.dep)+
+        "</b> (the worst glare that evening). Change the date to check your own day. "
+      :pick.today?"Departure set to <b>"+clockText(pick.dep)+"</b>, the worst glare that day. "
       :pick.found?"Not much glare on "+day(pick.asked)+", so the example moved to <b>"+day(pick.dep)+", "+clockText(pick.dep)+"</b>. "
-      :"No strong glare on this trip in the next 6 months. "));
+      :"No strong glare on this trip in the next 6 months. ");
     this.recompute();
   },
 
@@ -181,8 +195,8 @@ const PLAN={
      morning), and keep the one with the most glare (the same projectRoute
      scoring the planner uses, hills included; buildings load later). If the
      chosen day has none, step forward 3 days at a time, up to ~6 months. */
-  worstDeparture(t){
-    const r=this.routes[0], mid=r.coords[Math.floor(r.coords.length/2)], base=APP.when;
+  worstDeparture(t,base=APP.when){
+    const r=this.routes[0], mid=r.coords[Math.floor(r.coords.length/2)];
     const enough=800;                                   // at least ~0.5 mi of glare
     let best=null;
     for(let day=0; day<=180; day+=(day===0?1:3)){
